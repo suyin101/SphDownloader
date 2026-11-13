@@ -10,6 +10,9 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   finderGetCommentDetail、goToNext/PrevFlowFeed、loadLocalPlaylist 上报 "current"（自动下载），列表类接口上报 "list"。
   正则参考 ltaoo/wx_channels_download 的 pkg/scraper/wxchannels/interceptor.go，微信改版后去对照它更新。
   2026-11-13 在 Mac 微信 4.1.15 实测 9 个钩子全命中，下载解密成功。
+- 【灰度坑】同为 Windows 最新版微信，部分账号/电脑点分享卡片时，预览页 /finder-preview/pages/sph 调 openUrlWithExtraWebview(type:FinderFeed)
+  会被微信改走自带播放器 liteapp（日志只见 liteapp.weixin.qq.com、没有 /web/pages/feed），所有同类工具都只抓到图片。
+  v1.4.2 起 inject.js 在预览页拦截这个调用，改用 location.replace 在当前网页打开视频页（待对方电脑实测）。
 - inject.js：深度搜索 objectDesc.media，POST 同源 /__sphdl/report；每 2 秒 GET /__sphdl/task 取“链接下载”任务并让微信打开。
 - link.go：weixin.qq.com/sph/xxx → 公开接口 finder-preview/api/feed/get_feed_info（免登录）拿标题/作者/封面/dynamicExportId，
   拼 /web/pages/feed?eid=…，交给页面用 WeixinJSBridge openUrlWithExtraWebview 打开（失败就 location.href），

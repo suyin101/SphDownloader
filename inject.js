@@ -87,10 +87,41 @@
 
   send({ kind: "hello", href: location.href, ua: navigator.userAgent });
 
+  // 分享卡片的预览页（/finder-preview/）会用 openUrlWithExtraWebview(type:FinderFeed) 打开视频页。
+  // 部分 Windows 微信（同版本、被灰度）收到这个调用会改用微信自带播放器（liteapp），
+  // 不再加载网页，下载器就拿不到视频地址和解密钥匙。这里改成在当前网页里直接打开视频页。
+  var isPreview = location.pathname.indexOf("/finder-preview/") === 0;
+  function patchBridge() {
+    var b = window.WeixinJSBridge;
+    if (!isPreview || !b || !b.invoke || b.__sphdlPatched) return;
+    var raw = b.invoke;
+    try {
+      b.invoke = function (name, args) {
+        if (name === "openUrlWithExtraWebview" && args && /\/web\/pages\/feed/.test(String(args.url || ""))) {
+          send({ kind: "log", msg: "预览页改为直接打开视频网页", href: location.href });
+          location.replace(args.url);
+          return;
+        }
+        return raw.apply(this, arguments);
+      };
+      b.__sphdlPatched = true;
+    } catch (e) {}
+  }
+  if (isPreview) {
+    patchBridge();
+    document.addEventListener("WeixinJSBridgeReady", patchBridge);
+    var tries = 0;
+    var timer = setInterval(function () {
+      patchBridge();
+      if (++tries > 200) clearInterval(timer);
+    }, 50);
+  }
+
   // “链接下载”：下载器把要打开的视频地址交给页面，页面让微信打开它
   function openFeed(u) {
     var b = window.WeixinJSBridge;
     var fallback = function () { location.href = u; };
+    if (isPreview) { fallback(); return; } // 预览页直接在当前网页打开，原因见上
     if (b && b.invoke) {
       try {
         b.invoke("openUrlWithExtraWebview", { url: u, type: "FinderFeed", id: "FinderFeed" }, function (res) {
