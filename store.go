@@ -43,7 +43,8 @@ type Item struct {
 	File      string    `json:"file"`
 	CoverFile string    `json:"coverFile"`
 	Err       string    `json:"err"`
-	Seen      time.Time `json:"seen"`
+	Seen      time.Time `json:"seen"`   // 第一次出现在列表的时间（之后不变，排序稳定）
+	Opened    time.Time `json:"opened"` // 你在微信里打开它 / 粘贴链接的时间；打开过的排在最上面
 	fileKey   string
 }
 
@@ -67,6 +68,7 @@ type Store struct {
 	pageSeen      time.Time // 页面最近一次来取任务（新脚本才会）
 	lastReport    time.Time // 页面最近一次上报视频（旧脚本也会）
 	queue         chan *Item
+	currentKey    string // 最近打开的那条（界面上标“正在看”）
 	history       map[string]histEntry
 	histPath      string
 }
@@ -147,7 +149,8 @@ func (s *Store) addFeedsLocked(feeds []FeedInfo, current, force bool, source str
 			it.fileKey = encFileKey(f.URL)
 		}
 		if current {
-			it.Seen = time.Now()
+			it.Opened = time.Now()
+			s.currentKey = it.Key
 		}
 		// 自动触发（包括链接下载）不会重复下载已下载的；要重下得手动点“重新下载”
 		if (force || (current && s.AutoDownload)) && it.Status != "done" {
@@ -205,6 +208,7 @@ func (s *Store) matchTaskLocked(kind string, feeds []FeedInfo, href string) *lin
 	items := s.addFeedsLocked([]FeedInfo{f}, true, true, "link")
 	if len(items) > 0 && ph != nil {
 		items[0].Seen = ph.Seen
+		items[0].Opened = ph.Opened // 链接下载保持粘贴时的顺序
 		items[0].Link = ph.Link
 		items[0].LinkKey = ph.LinkKey
 		items[0].Source = "link"
@@ -228,7 +232,9 @@ func (s *Store) AddLinks(text string) int {
 	links := parseLinks(text)
 	s.mu.Lock()
 	var fresh []linkRef
-	for _, l := range links {
+	base := time.Now()
+	for i, l := range links {
+		opened := base.Add(time.Duration(len(links)-i)) // 一次贴多条时，第一条排最上面（相差几纳秒）
 		k := "link:" + l.key()
 		if it, ok := s.items[k]; ok && it.Status != "error" {
 			continue
@@ -237,7 +243,7 @@ func (s *Store) AddLinks(text string) int {
 		for _, it := range s.items {
 			if it.LinkKey == l.key() && it.Key != k {
 				dup = true // 列表里已经有这个链接的视频了
-				it.Seen = time.Now()
+				it.Opened = opened
 			}
 		}
 		if dup {
@@ -245,11 +251,11 @@ func (s *Store) AddLinks(text string) int {
 		}
 		if id, h := s.downloadedLinkLocked(l.key()); id != "" { // 以前下载过：直接显示已下载
 			s.items[id] = &Item{Key: id, FeedInfo: FeedInfo{ID: id, Title: h.Title, Nickname: h.Nickname, Cover: h.Cover},
-				Source: "link", Link: l.Raw, LinkKey: l.key(), Status: "done", File: h.File, Seen: time.Now()}
+				Source: "link", Link: l.Raw, LinkKey: l.key(), Status: "done", File: h.File, Seen: base, Opened: opened}
 			logf("这个链接之前下载过，不再重复下载：%s", h.Title)
 			continue
 		}
-		s.items[k] = &Item{Key: k, FeedInfo: FeedInfo{ID: k, Title: l.Raw}, Source: "link", Link: l.Raw, LinkKey: l.key(), Status: "resolving", Seen: time.Now()}
+		s.items[k] = &Item{Key: k, FeedInfo: FeedInfo{ID: k, Title: l.Raw}, Source: "link", Link: l.Raw, LinkKey: l.key(), Status: "resolving", Seen: base, Opened: opened}
 		fresh = append(fresh, l)
 	}
 	s.mu.Unlock()
@@ -431,6 +437,7 @@ func (s *Store) Get(key string) (Item, bool) {
 	return *it, true
 }
 
+// Snapshot 列表排序：打开过的（按打开时间，新的在上）> 只是预加载的（按出现时间，新的在上）。
 func (s *Store) Snapshot() ([]Item, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -438,8 +445,30 @@ func (s *Store) Snapshot() ([]Item, bool) {
 	for _, it := range s.items {
 		out = append(out, *it)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Seen.After(out[j].Seen) })
+	sortItems(out)
 	return out, s.gotCurrent
+}
+
+func sortItems(out []Item) {
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Opened.IsZero() != b.Opened.IsZero() {
+			return !a.Opened.IsZero()
+		}
+		if !a.Opened.Equal(b.Opened) {
+			return a.Opened.After(b.Opened)
+		}
+		if !a.Seen.Equal(b.Seen) {
+			return a.Seen.After(b.Seen)
+		}
+		return a.Key < b.Key
+	})
+}
+
+func (s *Store) CurrentKey() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentKey
 }
 
 func (s *Store) worker() {

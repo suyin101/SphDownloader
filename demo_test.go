@@ -33,6 +33,9 @@ func TestUIDemo(t *testing.T) {
 	add(Item{Key: "4", Source: "link", Status: "error", Err: "微信没有打开这条视频（视频号窗口要一直开着），点“下载”重试", FeedInfo: FeedInfo{Title: "让百万人尖叫的鬼屋？我们发现了这里的秘密", Nickname: "影视飓风MediaStorm"}}, 5)
 	add(Item{Key: "5", Source: "sniff", Status: "seen", FeedInfo: FeedInfo{Title: "拿到新手机0.01秒后……", Nickname: "小绵羊是个好人", Duration: 10, Size: 1 << 20, URL: "u"}}, 6)
 	s.pageSeen = now.Add(time.Hour)
+	s.items["1"].Opened = now
+	s.items["2"].Opened = now.Add(-time.Minute)
+	s.currentKey = "1"
 	logf("已启动。保存位置：/Users/demo/Downloads/视频号下载")
 	logf("视频号页面已连上：https://channels.weixin.qq.com/web/pages/home")
 	cfg := config{}

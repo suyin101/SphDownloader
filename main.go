@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	version = "1.4.0"
+	version = "1.4.1"
 	uiPort  = 18889
 )
 
@@ -288,7 +288,7 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]any{
 			"version": version, "items": items, "logs": logs, "dir": dir,
-			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online", "page": store.PageState(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent,
+			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent,
 		})
 	})
 	mux.HandleFunc("/api/preview", func(w http.ResponseWriter, r *http.Request) {

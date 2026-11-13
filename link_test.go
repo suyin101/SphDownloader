@@ -143,3 +143,49 @@ func TestDefaultNoAutoDownload(t *testing.T) {
 		t.Fatal(it.Status)
 	}
 }
+
+// 排序：打开过的永远在最上面（最近打开的第一），预加载的列表视频顺序不再跳动
+func TestOrderOpenedFirst(t *testing.T) {
+	s := NewStore(t.TempDir())
+	feed := func(id string) FeedInfo { return FeedInfo{ID: id, URL: "http://x/?encfilekey=" + id + "&token=t"} }
+	home := "https://channels.weixin.qq.com/web/pages/home"
+	s.AddReport("current", []FeedInfo{feed("A")}, home)
+	time.Sleep(2 * time.Millisecond)
+	s.AddReport("list", []FeedInfo{feed("p1"), feed("p2")}, home) // 后台预加载
+	time.Sleep(2 * time.Millisecond)
+	s.AddReport("current", []FeedInfo{feed("B")}, home) // 打开下一个
+	time.Sleep(2 * time.Millisecond)
+	s.AddReport("list", []FeedInfo{feed("p3")}, home)
+	s.AddReport("list", []FeedInfo{feed("p1")}, home) // 预加载重复出现，不能跳到前面
+	keys := func() string {
+		items, _ := s.Snapshot()
+		out := ""
+		for _, it := range items {
+			out += it.Key + " "
+		}
+		return out
+	}
+	if got := keys(); got[:4] != "B A " {
+		t.Fatalf("opened videos should be first: %s", got)
+	}
+	first := keys()
+	for i := 0; i < 5; i++ {
+		s.AddReport("list", []FeedInfo{feed("p2"), feed("p3")}, home)
+		if keys() != first {
+			t.Fatalf("order changed: %s -> %s", first, keys())
+		}
+	}
+	if s.CurrentKey() != "B" {
+		t.Fatal(s.CurrentKey())
+	}
+	// 回去再看 A → A 到第一
+	s.AddReport("current", []FeedInfo{feed("A")}, home)
+	if got := keys(); got[:4] != "A B " {
+		t.Fatal(got)
+	}
+	// 粘贴多条链接：按粘贴顺序排在最上面
+	s.AddLinks("https://weixin.qq.com/sph/L1\nhttps://weixin.qq.com/sph/L2")
+	if got := keys(); got[:30] != "link:sph:L1 link:sph:L2 A B p3" {
+		t.Fatal(got)
+	}
+}

@@ -89,6 +89,8 @@
   .tag.done { background:var(--brand-weak); color:var(--brand); }
   .tag.error { background:var(--red-weak); color:var(--red); }
   .tag.downloading, .tag.queued { background:var(--blue-weak); color:var(--blue); }
+  .tag.now { background:var(--brand); color:#fff; }
+  .row.now { box-shadow:inset 3px 0 0 var(--brand); }
   .tag.waiting, .tag.resolving { background:var(--orange-weak); color:var(--orange); }
   .empty { padding:56px 20px; text-align:center; color:var(--muted); }
   .empty b { display:block; color:var(--sub); font-size:14px; margin-bottom:6px; }
@@ -291,7 +293,7 @@ function render() {
   selected.forEach(function (k) { if (!keys[k]) selected.delete(k); });
 
   var visible = st.items.filter(function (i) { return inTab(i, filter); });
-  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile]; })]);
+  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), st.currentKey, visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile]; })]);
   if (sig !== lastSig) {
     lastSig = sig;
     $('tabs').innerHTML = TABS.map(function (t) {
@@ -331,7 +333,8 @@ function rowHTML(it) {
   if (it.status === 'done') ops.push('<button class="link" data-act="reveal" data-key="' + k + '">打开文件夹</button>');
   var tagText = STATUS[it.status] || it.status;
   if (it.status === 'downloading' && it.total > 0) tagText += ' ' + Math.floor(pct) + '%';
-  return '<div class="row' + (selected.has(it.key) ? ' sel' : '') + '">' +
+  var isNow = it.key === state.currentKey;
+  return '<div class="row' + (selected.has(it.key) ? ' sel' : '') + (isNow ? ' now' : '') + '">' +
     '<input type="checkbox" data-sel="' + k + '"' + (selected.has(it.key) ? ' checked' : '') + '>' +
     '<div class="thumb' + (canPreview(it) ? '' : ' nop') + '" data-act="preview" data-key="' + k + '">' +
       (it.cover ? '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(it.cover) + '">' : '') + '<div class="play"></div></div>' +
@@ -339,7 +342,7 @@ function rowHTML(it) {
       '<div class="meta">' + meta.join('<span>·</span>') + '</div>' + line2 +
       (it.status === 'downloading' ? '<div class="prog"><i style="width:' + pct + '%"></i></div>' : '') +
     '</div>' +
-    '<div class="ops"><span class="tag ' + it.status + '">' + tagText + '</span>' + ops.join('') + '</div></div>';
+    '<div class="ops">' + (isNow ? '<span class="tag now">正在看</span>' : '') + '<span class="tag ' + it.status + '">' + tagText + '</span>' + ops.join('') + '</div></div>';
 }
 
 $('tabs').addEventListener('click', function (e) {
