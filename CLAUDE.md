@@ -1,5 +1,10 @@
 # SphDownloader 视频号下载器（Mac + Windows）
 
+公开仓库 https://github.com/suyin101/SphDownloader 。发新版：改 main.go 的 version → `./release.sh --publish "更新说明"`
+（打包 Windows exe/zip + Mac zip 并 gh release create；软件启动时检查 releases/latest，开着自动更新就自动装）。
+updater.go + update_windows.go（运行中的 exe 改名 .old 再换新）/ update_darwin.go（换 .app 后 open -n）。
+Windows 证书优先装“本地计算机”（UAC 提权），失败退到当前用户；图标资源由 assets/make_syso.py 生成（不依赖外部工具）。
+
 原理：本机 HTTPS 代理（goproxy），只解密 channels.weixin.qq.com / res.wx.qq.com / *.video.qq.com，其它网站直接放行（原来有代理会当上游）。
 - proxy.go：给视频号页面注入 inject.js；改写 res.wx.qq.com 的 virtual_svg-icons-register / connect.publish 脚本，
   finderGetCommentDetail、goToNext/PrevFlowFeed、loadLocalPlaylist 上报 "current"（自动下载），列表类接口上报 "list"。
