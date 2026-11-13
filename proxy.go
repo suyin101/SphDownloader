@@ -313,7 +313,7 @@ func handleReport(r *http.Request, store *Store) *http.Response {
 			return goproxy.NewResponse(r, "application/json", http.StatusOK, `{"reload":true}`)
 		}
 		u := store.NextTask()
-		b, _ := json.Marshal(map[string]string{"url": u})
+		b, _ := json.Marshal(map[string]any{"url": u, "inPlace": store.OpenInPlace()})
 		if u != "" {
 			logf("让微信打开视频：%s", trimURL(u))
 		}

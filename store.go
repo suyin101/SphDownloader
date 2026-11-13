@@ -66,6 +66,7 @@ type Store struct {
 	Dir           string
 	gotCurrent    bool      // 收到过“正在看的视频”信号；没有的话才用视频请求来兜底
 	pageSeen      time.Time // 页面最近一次来取任务（新脚本才会）
+	inPlace       bool      // 链接下载改为在当前网页里跳转（部分 Windows 微信会把新窗口改走自带播放器，见 CLAUDE.md 灰度坑）
 	lastReport    time.Time // 页面最近一次上报视频（旧脚本也会）
 	queue         chan *Item
 	currentKey    string // 最近打开的那条（界面上标“正在看”）
@@ -285,6 +286,13 @@ func (s *Store) AddLinks(text string) int {
 }
 
 // NextTask 页面来取下一个要打开的视频。同一时间只开一个，等它下载上了再开下一个。
+// OpenInPlace 链接下载是否改为在当前网页里跳转。
+func (s *Store) OpenInPlace() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inPlace
+}
+
 func (s *Store) NextTask() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -293,10 +301,20 @@ func (s *Store) NextTask() string {
 		if t.state != "opening" {
 			continue
 		}
-		if time.Since(t.openedAt) < 25*time.Second {
+		wait := 25 * time.Second
+		if !s.inPlace {
+			wait = 10 * time.Second // 新窗口方式正常 2 秒内就有结果
+		}
+		if time.Since(t.openedAt) < wait {
 			return ""
 		}
-		if t.tries < 2 {
+		if !s.inPlace {
+			// 新窗口打不开视频网页，多半是被微信改走了自带播放器：以后都在当前网页里跳转，这次不算失败
+			s.inPlace = true
+			t.tries--
+			t.state = "pending"
+			logf("微信没用网页打开视频，改为在视频号页面里直接跳转")
+		} else if t.tries < 2 {
 			t.state = "pending"
 		} else {
 			t.state = "done"

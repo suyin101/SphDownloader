@@ -118,10 +118,11 @@
   }
 
   // “链接下载”：下载器把要打开的视频地址交给页面，页面让微信打开它
-  function openFeed(u) {
+  function openFeed(u, inPlace) {
     var b = window.WeixinJSBridge;
     var fallback = function () { location.href = u; };
-    if (isPreview) { fallback(); return; } // 预览页直接在当前网页打开，原因见上
+    // 预览页、或下载器发现新窗口会被改走自带播放器时，直接在当前网页打开，原因见上
+    if (isPreview || inPlace) { fallback(); return; }
     if (b && b.invoke) {
       try {
         b.invoke("openUrlWithExtraWebview", { url: u, type: "FinderFeed", id: "FinderFeed" }, function (res) {
@@ -138,7 +139,7 @@
     setInterval(function () {
       fetch("/__sphdl/task?v=" + SPHDL_V).then(function (r) { return r.json(); }).then(function (t) {
         if (t && t.reload) { location.reload(); return; } // 下载器升级了，刷新页面换新脚本
-        if (t && t.url) openFeed(t.url);
+        if (t && t.url) openFeed(t.url, !!t.inPlace);
       }).catch(function () {});
     }, 2000);
   }

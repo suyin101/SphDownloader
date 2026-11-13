@@ -189,3 +189,24 @@ func TestOrderOpenedFirst(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// 新窗口方式 10 秒没打开视频网页（被微信改走自带播放器）：改为当前网页跳转，且这次不算失败
+func TestLinkTaskFallbackInPlace(t *testing.T) {
+	s := NewStore(t.TempDir())
+	s.items["link:sph:abc"] = &Item{Key: "link:sph:abc", Source: "link", Status: "waiting"}
+	s.tasks = append(s.tasks, &linkTask{itemKey: "link:sph:abc", feedURL: "https://channels.weixin.qq.com/web/pages/feed?eid=E1", state: "pending"})
+	if s.NextTask() == "" || s.OpenInPlace() {
+		t.Fatal("first try should use new window")
+	}
+	s.tasks[0].openedAt = time.Now().Add(-11 * time.Second)
+	if u := s.NextTask(); u == "" || !s.OpenInPlace() {
+		t.Fatal("should retry in place", u)
+	}
+	if s.tasks[0].tries != 1 {
+		t.Fatal("fallback should not count as a try", s.tasks[0].tries)
+	}
+	s.tasks[0].openedAt = time.Now().Add(-11 * time.Second)
+	if s.NextTask() != "" {
+		t.Fatal("in-place mode waits 25s")
+	}
+}
