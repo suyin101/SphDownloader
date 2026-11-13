@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频号下载器</title>
+<style>
+  :root {
+    --bg:#f4f5f7; --panel:#fff; --text:#1d2129; --sub:#4e5969; --muted:#86909c; --line:#e5e6eb; --hover:#f2f3f5;
+    --brand:#07c160; --brand-weak:#e8f8ef; --blue:#165dff; --blue-weak:#e8f3ff; --red:#f53f3f; --red-weak:#ffece8;
+    --orange:#ff7d00; --orange-weak:#fff3e8; --shadow:0 1px 2px rgba(0,0,0,.05), 0 0 0 1px rgba(0,0,0,.03);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#17171a; --panel:#232326; --text:#e8e8ea; --sub:#b4b4ba; --muted:#808088; --line:#35353a; --hover:#2c2c30;
+      --brand-weak:#0f3a24; --blue-weak:#16294d; --red-weak:#4a1d1a; --orange-weak:#43290f; --shadow:0 0 0 1px rgba(255,255,255,.05);
+    }
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; -webkit-user-select:none; user-select:none; }
+  input, textarea { -webkit-user-select:text; user-select:text; }
+  .app { display:flex; flex-direction:column; height:100%; }
+  .top { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:12px 18px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .logo { width:26px; height:26px; border-radius:7px; background:var(--brand); display:grid; place-items:center; color:#fff; font-weight:700; font-size:14px; }
+  .top h1 { font-size:15px; margin:0; font-weight:600; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:20px; font-size:12px; background:var(--hover); color:var(--muted); }
+  .pill i { width:7px; height:7px; border-radius:50%; background:#c9cdd4; }
+  .pill.on { background:var(--brand-weak); color:var(--brand); }
+  .pill.on i { background:var(--brand); box-shadow:0 0 0 3px rgba(7,193,96,.2); }
+  .grow { flex:1; }
+  .toggle { display:inline-flex; align-items:center; gap:8px; cursor:pointer; padding:4px 10px; border:1px solid var(--line); border-radius:6px; }
+  .toggle input { display:none; }
+  .toggle i { position:relative; width:34px; height:20px; border-radius:10px; background:#c9cdd4; transition:background .2s; }
+  .toggle i::after { content:""; position:absolute; left:2px; top:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:left .2s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
+  .toggle input:checked + i { background:var(--brand); }
+  .toggle input:checked + i::after { left:16px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--panel); color:var(--text); padding:5px 12px; border-radius:6px; cursor:pointer; white-space:nowrap; }
+  button:hover:not(:disabled) { border-color:var(--blue); color:var(--blue); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--brand); border-color:var(--brand); color:#fff; }
+  button.primary:hover:not(:disabled) { filter:brightness(1.06); color:#fff; }
+  button.link { border:none; background:none; padding:4px 6px; color:var(--blue); }
+  button.link:hover:not(:disabled) { background:var(--blue-weak); }
+  button.danger:hover:not(:disabled) { border-color:var(--red); color:var(--red); }
+  .main { flex:1; overflow:auto; padding:16px 18px 24px; display:flex; flex-direction:column; gap:14px; }
+  .main > * { flex-shrink:0; }
+  .card { background:var(--panel); border-radius:10px; box-shadow:var(--shadow); }
+  .linkbox { padding:14px; display:flex; gap:10px; align-items:stretch; }
+  .linkbox textarea { flex:1; resize:none; height:58px; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; background:var(--bg); color:var(--text); outline:none; }
+  .linkbox textarea:focus { border-color:var(--brand); }
+  .linkbox .side { display:flex; flex-direction:column; gap:6px; justify-content:center; }
+  .linkbox .side button { padding:8px 18px; }
+  .hint { font-size:12px; color:var(--muted); padding:0 14px 12px; margin-top:-4px; }
+  .banner { display:flex; gap:10px; align-items:center; padding:10px 14px; border-radius:10px; background:var(--orange-weak); color:var(--orange); }
+  .banner b { color:inherit; }
+  .banner.upd { background:var(--blue-weak); color:var(--blue); }
+  .listcard { display:flex; flex-direction:column; min-height:280px; }
+  .bar { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .tabs { display:flex; gap:2px; background:var(--hover); padding:2px; border-radius:7px; }
+  .tabs span { padding:3px 10px; border-radius:5px; cursor:pointer; color:var(--sub); }
+  .tabs span.on { background:var(--panel); color:var(--text); box-shadow:var(--shadow); font-weight:500; }
+  .tabs em { font-style:normal; color:var(--muted); margin-left:3px; font-size:11px; }
+  .search input { width:200px; padding:5px 10px 5px 28px; border:1px solid var(--line); border-radius:6px; font:inherit; background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%2386909c' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cpath d='m9.5 9.5 3 3'/%3E%3C/svg%3E") no-repeat 9px center; color:var(--text); outline:none; }
+  .search input:focus { border-color:var(--brand); }
+  .chk { display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:var(--sub); }
+  input[type=checkbox] { width:15px; height:15px; accent-color:var(--brand); margin:0; cursor:pointer; }
+  .rows { display:flex; flex-direction:column; }
+  .row { display:grid; grid-template-columns:22px 60px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); }
+  .row:hover { background:var(--hover); }
+  .row.sel { background:var(--brand-weak); }
+  .thumb { position:relative; width:60px; height:80px; border-radius:6px; overflow:hidden; background:var(--line); cursor:pointer; }
+  .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .thumb .play { position:absolute; inset:0; display:grid; place-items:center; opacity:0; transition:opacity .15s; background:rgba(0,0,0,.35); }
+  .thumb:hover .play { opacity:1; }
+  .thumb .play::after { content:""; border-left:14px solid #fff; border-top:9px solid transparent; border-bottom:9px solid transparent; margin-left:4px; }
+  .thumb.nop { cursor:default; }
+  .thumb.nop .play { display:none; }
+  .info { min-width:0; }
+  .title { font-weight:500; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; word-break:break-all; }
+  .meta { color:var(--muted); font-size:12px; margin-top:3px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .meta .src { padding:0 6px; border-radius:4px; background:var(--hover); font-size:11px; }
+  .meta .err { color:var(--red); }
+  .meta .file { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:420px; }
+  .prog { height:4px; background:var(--line); border-radius:2px; margin-top:6px; overflow:hidden; max-width:360px; }
+  .prog i { display:block; height:100%; background:var(--brand); transition:width .4s; }
+  .ops { display:flex; align-items:center; gap:2px; }
+  .tag { font-size:12px; padding:2px 9px; border-radius:10px; margin-right:6px; white-space:nowrap; background:var(--hover); color:var(--sub); }
+  .tag.done { background:var(--brand-weak); color:var(--brand); }
+  .tag.error { background:var(--red-weak); color:var(--red); }
+  .tag.downloading, .tag.queued { background:var(--blue-weak); color:var(--blue); }
+  .tag.waiting, .tag.resolving { background:var(--orange-weak); color:var(--orange); }
+  .empty { padding:56px 20px; text-align:center; color:var(--muted); }
+  .empty b { display:block; color:var(--sub); font-size:14px; margin-bottom:6px; }
+  details.logs { padding:10px 14px; }
+  details.logs summary { cursor:pointer; color:var(--muted); }
+  details.logs pre { -webkit-user-select:text; user-select:text; margin:10px 0 0; background:#1d2129; color:#c9cdd4; padding:10px 12px; border-radius:8px; max-height:220px; overflow:auto; font:12px/1.6 ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-all; }
+  .mask { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:10; padding:20px; }
+  .mask.show { display:flex; }
+  .dialog { background:var(--panel); border-radius:12px; width:min(460px,100%); padding:20px; box-shadow:0 10px 40px rgba(0,0,0,.3); }
+  .dialog h3 { margin:0 0 14px; font-size:15px; }
+  .field { margin-bottom:14px; }
+  .field label.t { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
+  .path { display:flex; gap:8px; align-items:center; }
+  .path code { flex:1; padding:6px 10px; background:var(--bg); border-radius:6px; font:12px ui-monospace,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; -webkit-user-select:text; user-select:text; }
+  .switch { display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-top:1px solid var(--line); }
+  .switch small { display:block; color:var(--muted); font-size:12px; }
+  .dfoot { display:flex; justify-content:space-between; align-items:center; margin-top:16px; color:var(--muted); font-size:12px; }
+  .player { width:min(900px,100%); background:#000; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+  .player video { width:100%; max-height:72vh; background:#000; display:block; }
+  .player .pbar { display:flex; gap:8px; align-items:center; padding:10px 14px; background:#18181b; color:#ddd; }
+  .player .pbar .pt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .player .pbar button { background:#2a2a2e; border-color:#3a3a3f; color:#eee; }
+  .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(20px); background:rgba(29,33,41,.92); color:#fff; padding:8px 16px; border-radius:8px; opacity:0; transition:all .2s; pointer-events:none; z-index:20; max-width:80%; }
+  .toast.show { opacity:1; transform:translateX(-50%); }
+  @media (max-width:640px) {
+    .row { grid-template-columns:22px 48px minmax(0,1fr); }
+    .main { padding:12px 16px 20px; }
+    .top { padding:10px 16px; }
+    .row .ops { grid-column:2 / -1; flex-wrap:wrap; }
+    .thumb { width:48px; height:64px; }
+    .linkbox { flex-direction:column; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="logo">▶</div>
+    <h1>视频号下载器</h1>
+    <span class="pill" id="pill"><i></i><span id="pillText">未连接视频号</span></span>
+    <span class="grow"></span>
+    <label class="toggle" title="开启后才能抓取微信视频号里的视频；关闭会还原网络设置、释放端口">
+      <span>嗅探</span><input type="checkbox" id="sniff" onchange="setSniff(this.checked)"><i></i>
+    </label>
+    <button onclick="openDir()">打开下载文件夹</button>
+    <button onclick="showSettings()">设置</button>
+  </div>
+
+  <div class="main">
+    <div class="banner upd" id="updBanner" style="display:none">
+      <span>🎉</span><span class="grow" id="updText"></span>
+      <button class="primary" id="updBtn" onclick="applyUpdate()">立即更新</button>
+    </div>
+    <div class="banner" id="banner">
+      <span>👉</span>
+      <span id="bannerText"></span>
+    </div>
+
+    <div class="card">
+      <div class="linkbox">
+        <textarea id="links" placeholder="粘贴视频号链接，一行一个，可以一次贴很多条&#10;例如 https://weixin.qq.com/sph/AuQGcNgaw"></textarea>
+        <div class="side">
+          <button class="primary" id="addBtn" onclick="addLinks()">解析并下载</button>
+          <button id="pasteBtn" onclick="pasteLinks()">从剪贴板粘贴</button>
+        </div>
+      </div>
+      <div class="hint">链接下载需要电脑版微信的视频号窗口开着：软件会让微信依次打开每条视频，拿到地址后自动下载。</div>
+    </div>
+
+    <div class="card listcard">
+      <div class="bar">
+        <div class="tabs" id="tabs"></div>
+        <div class="search"><input id="q" type="search" placeholder="搜索标题或作者" autocomplete="off"></div>
+        <span class="grow"></span>
+        <label class="chk"><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)">全选</label>
+        <button id="bDl" onclick="batch('download')" disabled>下载选中</button>
+        <button id="bCover" onclick="batch('cover')" disabled>下载封面</button>
+        <button id="bRm" class="danger" onclick="batch('remove')" disabled>移除</button>
+        <button id="bClear" class="danger" onclick="clearList()">清空列表</button>
+      </div>
+      <div class="rows" id="rows"></div>
+    </div>
+
+    <details class="card logs">
+      <summary>运行日志</summary>
+      <pre id="logs"></pre>
+    </details>
+  </div>
+</div>
+
+<div class="mask" id="playerMask" onclick="if(event.target===this)closePlayer()">
+  <div class="player">
+    <video id="video" controls playsinline></video>
+    <div class="pbar">
+      <span class="pt" id="ptitle"></span>
+      <button id="pDl">下载</button>
+      <button id="pReveal" style="display:none">打开所在文件夹</button>
+      <button onclick="closePlayer()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="mask" id="setMask" onclick="if(event.target===this)hide('setMask')">
+  <div class="dialog">
+    <h3>设置</h3>
+    <div class="field">
+      <label class="t">保存位置</label>
+      <div class="path"><code id="dir"></code><button onclick="chooseDir()">更改…</button></div>
+    </div>
+    <div class="switch">
+      <div>点开视频就自动下载<small>默认关闭：视频只出现在列表里，你勾选后再下载</small></div>
+      <input type="checkbox" id="optAuto" onchange="setOpt({auto:this.checked})">
+    </div>
+    <div class="switch">
+      <div>同时下载封面<small>视频下载完后，存一张同名 .jpg 封面图</small></div>
+      <input type="checkbox" id="optCover" onchange="setOpt({cover:this.checked})">
+    </div>
+    <div class="switch">
+      <div>自动更新<small>打开软件时有新版本就自动安装（正在下载视频时不会打断）</small></div>
+      <input type="checkbox" id="optUpd" onchange="setOpt({autoUpdate:this.checked})">
+    </div>
+    <div class="switch">
+      <div><span id="ver"></span><small id="updInfo">　</small></div>
+      <span><button onclick="checkUpdate()" id="chkBtn">检查更新</button> <button onclick="api('logs',{}).catch(fail)">日志文件夹</button></span>
+    </div>
+    <div class="dfoot">
+      <span></span>
+      <span><button class="danger" onclick="quitApp()">退出软件</button> <button class="primary" onclick="hide('setMask')">完成</button></span>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var state = null, filter = 'all', selected = new Set(), lastSig = '', playingKey = '';
+var STATUS = { resolving:'解析中', waiting:'等微信打开', seen:'未下载', queued:'排队中', downloading:'下载中', done:'已下载', error:'失败' };
+var TABS = [['all','全部'],['seen','未下载'],['active','进行中'],['done','已完成'],['error','失败']];
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); }
+function mb(n) { return n > 0 ? (n / 1048576).toFixed(1) + ' MB' : ''; }
+function dur(s) { if (!s) return ''; s = Math.round(s); var m = Math.floor(s / 60), x = s % 60; return m + ':' + (x < 10 ? '0' : '') + x; }
+function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(function () { t.classList.remove('show'); }, 2600); }
+function show(id) { $(id).classList.add('show'); }
+function hide(id) { $(id).classList.remove('show'); }
+
+function api(name, body) {
+  return fetch('/api/' + name, { method: 'POST', headers: { 'X-Sphdl': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+    .then(function (r) { return r.text().then(function (t) { if (!r.ok) throw new Error(t.trim()); try { return JSON.parse(t); } catch (e) { return {}; } }); })
+    .finally(refresh);
+}
+function fail(e) { toast(e.message || String(e)); }
+
+function matchQ(it) {
+  var q = $('q').value.trim().toLowerCase();
+  if (!q) return true;
+  return q.split(/\s+/).every(function (w) { return ((it.title || '') + ' ' + (it.nickname || '')).toLowerCase().indexOf(w) >= 0; });
+}
+function inTab(it, tab) {
+  if (!matchQ(it)) return false;
+  if (tab === 'all') return true;
+  if (tab === 'active') return ['resolving','waiting','queued','downloading'].indexOf(it.status) >= 0;
+  return it.status === tab;
+}
+function canPreview(it) { return it.url && it.key.indexOf('link:') !== 0; }
+function find(key) { return state && state.items.find(function (i) { return i.key === key; }); }
+
+function render() {
+  var st = state;
+  $('sniff').checked = st.sniff;
+  $('pill').className = 'pill' + (st.sniff && st.online ? ' on' : '');
+  $('pillText').textContent = !st.sniff ? '嗅探已关闭' : st.online ? '视频号已连接' : (st.page === 'stale' ? '视频号需要重开' : '未连接视频号');
+  $('banner').style.display = st.sniff && st.online ? 'none' : '';
+  $('bannerText').innerHTML = !st.sniff
+    ? '嗅探已关闭，网络设置已还原。需要下载视频号视频时，打开右上角的<b>嗅探</b>开关。' + (st.sniffErr ? '（' + esc(st.sniffErr) + '）' : '')
+    : st.page === 'stale'
+    ? '视频号窗口还在用旧版本的脚本。请<b>关掉微信的视频号窗口，再从微信左侧点“视频号”打开一次</b>（只需这一次）。'
+    : '打开<b>电脑版微信 → 视频号</b>，看过的视频会出现在下面，勾选后下载。已经开着的话，<b>关掉视频号窗口再打开一次</b>。';
+  $('ver').textContent = '当前版本 v' + st.version;
+  $('optUpd').checked = st.autoUpdate;
+  var u = st.update || {};
+  var showUpd = ['available','downloading','restarting'].indexOf(u.status) >= 0 || (u.status === 'error' && u.latest && u.latest !== st.version && u.err.indexOf('GitHub') < 0);
+  $('updBanner').style.display = showUpd ? '' : 'none';
+  if (showUpd) {
+    var pct = u.total > 0 ? Math.floor(u.progress / u.total * 100) : 0;
+    $('updText').innerHTML = u.status === 'downloading' ? '正在下载新版本 v' + esc(u.latest) + '… ' + pct + '%'
+      : u.status === 'restarting' ? '新版本已下载，正在重启软件…'
+      : u.status === 'error' ? '更新失败：' + esc(u.err)
+      : '发现新版本 <b>v' + esc(u.latest) + '</b>' + (u.notes ? '：' + esc(u.notes.split('\n')[0]).slice(0, 80) : '');
+    $('updBtn').style.display = (u.status === 'available' || u.status === 'error') ? '' : 'none';
+    $('updBtn').textContent = u.status === 'error' ? '重试' : '立即更新';
+  }
+  $('updInfo').textContent = u.status === 'checking' ? '正在检查更新…' : u.status === 'latest' ? '已是最新版本'
+    : u.status === 'available' ? '有新版本 v' + u.latest : u.status === 'error' ? u.err : '　';
+  $('dir').textContent = st.dir; $('dir').title = st.dir;
+  $('optAuto').checked = st.auto; $('optCover').checked = st.cover;
+
+  var keys = {}; st.items.forEach(function (i) { keys[i.key] = 1; });
+  selected.forEach(function (k) { if (!keys[k]) selected.delete(k); });
+
+  var visible = st.items.filter(function (i) { return inTab(i, filter); });
+  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile]; })]);
+  if (sig !== lastSig) {
+    lastSig = sig;
+    $('tabs').innerHTML = TABS.map(function (t) {
+      var n = st.items.filter(function (i) { return inTab(i, t[0]); }).length;
+      return '<span class="' + (filter === t[0] ? 'on' : '') + '" data-tab="' + t[0] + '">' + t[1] + '<em>' + n + '</em></span>';
+    }).join('');
+    $('rows').innerHTML = visible.length ? visible.map(rowHTML).join('') :
+      (st.items.length ? '<div class="empty">' + ($('q').value.trim() ? '没有搜到相关视频' : '这个分类里没有视频') + '</div>' :
+      '<div class="empty"><b>还没有视频</b>在微信视频号里点开一个视频，或者在上面粘贴链接</div>');
+  }
+  var sel = Array.from(selected);
+  $('bDl').disabled = $('bCover').disabled = $('bRm').disabled = !sel.length;
+  $('bDl').textContent = sel.length ? '下载选中 (' + sel.length + ')' : '下载选中';
+  $('selAll').checked = visible.length > 0 && visible.every(function (i) { return selected.has(i.key); });
+
+  var logs = $('logs'), atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 5;
+  logs.textContent = st.logs.join('\n');
+  if (atBottom) logs.scrollTop = logs.scrollHeight;
+}
+
+function rowHTML(it) {
+  var k = esc(it.key), pct = it.total > 0 ? Math.min(100, it.progress / it.total * 100) : 0;
+  var meta = [];
+  meta.push('<span class="src">' + (it.source === 'link' ? '链接' : '嗅探') + '</span>');
+  if (it.nickname) meta.push('<span>' + esc(it.nickname) + '</span>');
+  if (it.duration) meta.push('<span>' + dur(it.duration) + '</span>');
+  var size = mb(it.total || it.size); if (size) meta.push('<span>' + size + '</span>');
+  if (it.width && it.height) meta.push('<span>' + it.width + '×' + it.height + '</span>');
+  var line2 = '';
+  if (it.status === 'error') line2 = '<div class="meta"><span class="err">' + esc(it.err) + '</span></div>';
+  else if (it.status === 'done' && it.file) line2 = '<div class="meta"><span class="file" title="' + esc(it.file) + '">' + esc(it.file) + '</span></div>';
+  var ops = [];
+  if (canPreview(it)) ops.push('<button class="link" data-act="preview" data-key="' + k + '">预览</button>');
+  if (it.status === 'seen' || it.status === 'error') ops.push('<button class="link" data-act="download" data-key="' + k + '">下载</button>');
+  if (it.status === 'done') ops.push('<button class="link" data-act="download" data-key="' + k + '">重新下载</button>');
+  if (it.cover && it.status !== 'resolving') ops.push('<button class="link" data-act="cover" data-key="' + k + '">' + (it.coverFile ? '封面✓' : '下载封面') + '</button>');
+  if (it.status === 'done') ops.push('<button class="link" data-act="reveal" data-key="' + k + '">打开文件夹</button>');
+  var tagText = STATUS[it.status] || it.status;
+  if (it.status === 'downloading' && it.total > 0) tagText += ' ' + Math.floor(pct) + '%';
+  return '<div class="row' + (selected.has(it.key) ? ' sel' : '') + '">' +
+    '<input type="checkbox" data-sel="' + k + '"' + (selected.has(it.key) ? ' checked' : '') + '>' +
+    '<div class="thumb' + (canPreview(it) ? '' : ' nop') + '" data-act="preview" data-key="' + k + '">' +
+      (it.cover ? '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(it.cover) + '">' : '') + '<div class="play"></div></div>' +
+    '<div class="info"><div class="title" title="' + esc(it.title) + '">' + esc(it.title || '(无标题)') + '</div>' +
+      '<div class="meta">' + meta.join('<span>·</span>') + '</div>' + line2 +
+      (it.status === 'downloading' ? '<div class="prog"><i style="width:' + pct + '%"></i></div>' : '') +
+    '</div>' +
+    '<div class="ops"><span class="tag ' + it.status + '">' + tagText + '</span>' + ops.join('') + '</div></div>';
+}
+
+$('tabs').addEventListener('click', function (e) {
+  var t = e.target.closest('[data-tab]'); if (!t) return;
+  filter = t.dataset.tab; selected.clear(); render();
+});
+$('q').addEventListener('input', function () { selected.clear(); render(); });
+$('rows').addEventListener('change', function (e) {
+  var k = e.target.dataset.sel; if (!k) return;
+  if (e.target.checked) selected.add(k); else selected.delete(k);
+  render();
+});
+$('rows').addEventListener('click', function (e) {
+  var b = e.target.closest('[data-act]'); if (!b) return;
+  var key = b.dataset.key, it = find(key); if (!it) return;
+  var act = b.dataset.act;
+  if (act === 'preview') { if (canPreview(it)) openPlayer(it); }
+  else if (act === 'download') api('download', { keys: [key] }).catch(fail);
+  else if (act === 'cover') api('cover', { keys: [key] }).then(function (r) { toast('封面已保存'); }).catch(fail);
+  else if (act === 'reveal') api('open', { file: it.file }).catch(fail);
+});
+function toggleAll(on) {
+  state.items.filter(function (i) { return inTab(i, filter); }).forEach(function (i) { on ? selected.add(i.key) : selected.delete(i.key); });
+  render();
+}
+function batch(kind) {
+  var keys = Array.from(selected); if (!keys.length) return;
+  if (kind === 'download') api('download', { keys: keys }).then(function (r) { toast(r.n ? '已开始下载 ' + r.n + ' 个' : '选中的都已经在下载或下载过了'); selected.clear(); }).catch(fail);
+  if (kind === 'cover') api('cover', { keys: keys }).then(function () { toast('正在保存 ' + keys.length + ' 张封面'); }).catch(fail);
+  if (kind === 'remove') api('remove', { keys: keys }).then(function () { selected.clear(); }).catch(fail);
+}
+function pasteLinks() {
+  fetch('/api/clipboard', { method: 'POST', headers: { 'X-Sphdl': '1' } }).then(function (r) { return r.text(); }).then(function (t) {
+    if (!t.trim()) { toast('剪贴板是空的'); return; }
+    var box = $('links'); box.value = (box.value.trim() ? box.value.trim() + '\n' : '') + t.trim(); box.focus();
+  }).catch(function () { toast('读取剪贴板失败，请点输入框后按 ⌘V / Ctrl+V'); });
+}
+function addLinks() {
+  var text = $('links').value.trim();
+  if (!text) { toast('先粘贴视频号链接'); $('links').focus(); return; }
+  $('addBtn').disabled = true;
+  api('links', { text: text }).then(function (r) {
+    $('links').value = '';
+    toast('已添加 ' + r.n + ' 个链接' + (!state.sniff ? '。链接下载需要先打开右上角的“嗅探”' : state.online ? '，正在交给微信打开' : '，请打开微信视频号'));
+    filter = 'all';
+  }).catch(fail).finally(function () { $('addBtn').disabled = false; });
+}
+$('links').addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addLinks(); });
+
+function openPlayer(it) {
+  playingKey = it.key;
+  $('ptitle').textContent = (it.nickname ? it.nickname + '：' : '') + (it.title || '');
+  var v = $('video');
+  v.src = '/api/preview?key=' + encodeURIComponent(it.key);
+  v.play().catch(function () {});
+  updatePlayerButtons();
+  show('playerMask');
+}
+function updatePlayerButtons() {
+  var it = find(playingKey); if (!it) return;
+  $('pDl').style.display = it.status === 'done' ? 'none' : '';
+  $('pDl').disabled = it.status === 'queued' || it.status === 'downloading';
+  $('pDl').textContent = it.status === 'downloading' ? '下载中…' : (it.status === 'queued' ? '排队中' : '下载');
+  $('pReveal').style.display = it.status === 'done' ? '' : 'none';
+}
+$('pDl').onclick = function () { api('download', { keys: [playingKey] }).then(function () { toast('已开始下载'); }).catch(fail); };
+$('pReveal').onclick = function () { var it = find(playingKey); if (it) api('open', { file: it.file }).catch(fail); };
+function closePlayer() { var v = $('video'); v.pause(); v.removeAttribute('src'); v.load(); playingKey = ''; hide('playerMask'); }
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closePlayer(); hide('setMask'); } });
+
+function setSniff(on) {
+  api('sniff', { on: on }).then(function () {
+    toast(on ? '嗅探已开启。在微信里关掉视频号窗口再打开一次' : '嗅探已关闭，网络设置已还原');
+  }).catch(function (e) { $('sniff').checked = !on; fail(e); });
+}
+var clearArmed = 0;
+function clearList() {
+  var b = $('bClear');
+  if (!clearArmed) {
+    clearArmed = setTimeout(function () { clearArmed = 0; b.textContent = '清空列表'; }, 3000);
+    b.textContent = '再点一次确认';
+    return;
+  }
+  clearTimeout(clearArmed); clearArmed = 0; b.textContent = '清空列表';
+  api('clear', {}).then(function (r) { selected.clear(); toast('已清空 ' + r.n + ' 条（正在下载的保留）'); }).catch(fail);
+}
+function checkUpdate() {
+  $('chkBtn').disabled = true;
+  api('checkupdate', {}).then(function (u) {
+    toast(u.status === 'available' ? '发现新版本 v' + u.latest : '已是最新版本');
+  }).catch(fail).finally(function () { $('chkBtn').disabled = false; });
+}
+function applyUpdate() { api('applyupdate', {}).catch(fail); }
+function openDir() { api('open', {}).catch(fail); }
+function showSettings() { show('setMask'); }
+function chooseDir() { api('choosedir', {}).then(function (r) { if (r.dir) $('dir').textContent = r.dir; }).catch(fail); }
+function setOpt(o) { api('settings', o).catch(fail); }
+function quitApp() {
+  api('quit', {}).catch(function () {});
+  document.body.innerHTML = '<div class="empty" style="padding-top:30vh"><b>已退出</b>网络设置已恢复，可以关掉这个窗口了。</div>';
+}
+
+function refresh() {
+  return fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
+    state = s; render(); if (playingKey) updatePlayerButtons();
+  }).catch(function () { $('pillText').textContent = '下载器已关闭'; $('pill').className = 'pill'; });
+}
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

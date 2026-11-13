@@ -1,0 +1,16 @@
+module sphdownloader
+
+go 1.26.0
+
+require (
+	github.com/elazarl/goproxy v1.9.4
+	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
+	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6
+	golang.org/x/sys v0.50.0
+)
+
+require (
+	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
+	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
+)

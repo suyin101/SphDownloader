@@ -1,0 +1,3 @@
+dist/
+*.syso
+.DS_Store
