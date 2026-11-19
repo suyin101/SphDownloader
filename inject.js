@@ -42,6 +42,15 @@
       height: Number(m.height || 0),
       duration: m.videoPlayLen || 0,
       size: Number(m.fileSize || 0),
+      specs: (m.spec || feed.spec || []).map(function (x) {
+        return {
+          fileFormat: String(x.fileFormat || ""),
+          width: Number(x.width || 0),
+          height: Number(x.height || 0),
+          levelOrder: Number(x.levelOrder || 0),
+          bitrate: Number(x.videoBitrate || x.bitRate || 0),
+        };
+      }).filter(function (x) { return x.fileFormat; }),
       createtime: feed.createtime || 0,
     };
   }

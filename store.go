@@ -27,6 +27,66 @@ type FeedInfo struct {
 	CreateTime int64  `json:"createtime"`
 	Width      int    `json:"width"`
 	Height     int    `json:"height"`
+	Specs      []Spec `json:"specs,omitempty"`
+}
+
+// Spec 视频号给每条视频转好的几个清晰度档位（xWT111 等）。
+// levelOrder 越小（大于 0）档位越高；同档位比码率。
+type Spec struct {
+	FileFormat string `json:"fileFormat"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	LevelOrder int    `json:"levelOrder"`
+	Bitrate    int    `json:"bitrate"`
+}
+
+func bestSpec(specs []Spec) *Spec {
+	var best *Spec
+	for i := range specs {
+		sp := &specs[i]
+		if sp.FileFormat == "" {
+			continue
+		}
+		if best == nil {
+			best = sp
+			continue
+		}
+		a, b := sp.LevelOrder, best.LevelOrder
+		switch {
+		case a > 0 && (b <= 0 || a < b):
+			best = sp
+		case a == b || (a <= 0 && b <= 0):
+			if sp.Width*sp.Height > best.Width*best.Height ||
+				(sp.Width*sp.Height == best.Width*best.Height && sp.Bitrate > best.Bitrate) {
+				best = sp
+			}
+		}
+	}
+	return best
+}
+
+// candidateURLs 按清晰度从高到低给出要试的下载地址：
+// 最高档位（完整地址 + X-snsvideoflag）→ 只留 encfilekey/token → 原地址。
+// 以前只用第二种，实测拿到的是 1024×576、350kbps 的低清版。
+func candidateURLs(f FeedInfo) []string {
+	var out []string
+	if sp := bestSpec(f.Specs); sp != nil && f.URL != "" {
+		u := f.URL
+		if strings.Contains(u, "X-snsvideoflag=") {
+			if pu, err := url.Parse(u); err == nil {
+				q := pu.Query()
+				q.Del("X-snsvideoflag")
+				pu.RawQuery = q.Encode()
+				u = pu.String()
+			}
+		}
+		sep := "&"
+		if !strings.Contains(u, "?") {
+			sep = "?"
+		}
+		out = append(out, u+sep+"X-snsvideoflag="+url.QueryEscape(sp.FileFormat))
+	}
+	return append(out, originalURL(f.URL), f.URL)
 }
 
 // Item 列表里的一条。状态：
@@ -235,7 +295,7 @@ func (s *Store) AddLinks(text string) int {
 	var fresh []linkRef
 	base := time.Now()
 	for i, l := range links {
-		opened := base.Add(time.Duration(len(links)-i)) // 一次贴多条时，第一条排最上面（相差几纳秒）
+		opened := base.Add(time.Duration(len(links) - i)) // 一次贴多条时，第一条排最上面（相差几纳秒）
 		k := "link:" + l.key()
 		if it, ok := s.items[k]; ok && it.Status != "error" {
 			continue
@@ -608,9 +668,12 @@ func (s *Store) download(it *Item, f FeedInfo) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	resp, err := getWithFallback(originalURL(f.URL), f.URL)
+	resp, err := getWithFallback(candidateURLs(f)...)
 	if err != nil {
 		return "", err
+	}
+	if sp := bestSpec(f.Specs); sp != nil {
+		logf("清晰度：%s %dx%d（共 %d 档）", sp.FileFormat, sp.Width, sp.Height, len(f.Specs))
 	}
 	defer resp.Body.Close()
 
@@ -664,7 +727,7 @@ func (s *Store) ServePreview(w http.ResponseWriter, r *http.Request, key string)
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	req, _ := http.NewRequestWithContext(r.Context(), "GET", originalURL(it.URL), nil)
+	req, _ := http.NewRequestWithContext(r.Context(), "GET", candidateURLs(it.FeedInfo)[0], nil)
 	if rg := r.Header.Get("Range"); rg != "" {
 		req.Header.Set("Range", rg)
 	}
@@ -696,10 +759,12 @@ func (s *Store) ServePreview(w http.ResponseWriter, r *http.Request, key string)
 
 func getWithFallback(urls ...string) (*http.Response, error) {
 	var lastErr error
-	for i, u := range urls {
-		if i > 0 && u == urls[0] {
+	tried := map[string]bool{}
+	for _, u := range urls {
+		if u == "" || tried[u] {
 			continue
 		}
+		tried[u] = true
 		req, _ := http.NewRequest("GET", u, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
 		resp, err := client.Do(req)
@@ -713,6 +778,9 @@ func getWithFallback(urls ...string) (*http.Response, error) {
 			continue
 		}
 		return resp, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("没有视频地址")
 	}
 	return nil, lastErr
 }

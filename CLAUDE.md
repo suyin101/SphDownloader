@@ -18,8 +18,11 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
 - link.go：weixin.qq.com/sph/xxx → 公开接口 finder-preview/api/feed/get_feed_info（免登录）拿标题/作者/封面/dynamicExportId，
   拼 /web/pages/feed?eid=…，交给页面用 WeixinJSBridge openUrlWithExtraWebview 打开（失败就 location.href），
   页面上报 current 时按 href 里的 eid 对上任务，强制下载。一次只开一个，25 秒超时重试 2 次。【链接下载 2026-11-13 实测成功】
+- 【原画已封】2026-11-19 调研：地址里 basedata 是签过名的可下载档位名单（只有 xWT111/112/113/126/127/128 + 音频 xA0/xA2），原片不在名单里，改参数无效。
+  ltaoo #562/#581、nobiyou #98、qiye45 #178、putyy #416 都确认 2026-08 底起原画下不了，最高就是微信给的转码档（常见 720，部分视频有 1080）。微信再放开时再看。
 - history.go：下载记录 history.json，下过的视频/链接不再自动重下（手动“重新下载”除外）。sniffer.go：嗅探开关，关=还原代理+关端口+断开连接。
-- store.go：下载队列（3 并发），原画质 url，封面，/api/preview 边下边解密（支持 Range）。
+- store.go：下载队列（3 并发）。【清晰度】只留 encfilekey/token 的“原画质”地址实测只有 1024×576/350kbps；v1.4.4 起 inject.js 上报 media.spec 档位，
+  candidateURLs 先用完整地址 + &X-snsvideoflag=最高档（levelOrder 最小的正数，同档比码率，参照 ltaoo PickHighestSpec），失败再退回旧地址。封面，/api/preview 边下边解密（支持 Range）。
 - 窗口：Mac webview_go（cgo），Windows go-webview2（纯 Go）。关窗口=退出并还原代理；guard.go 守护进程兜底还原。
 - sys_darwin.go：networksetup 改所有网络服务的 web/secure 代理、关 SOCKS，退出恢复；security add-trusted-cert 进登录钥匙串。
 - sys_windows.go：HKCU 注册表代理；certutil -user 装证书。
