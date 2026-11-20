@@ -20,7 +20,7 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   内存，extractSeeds 宽松收集候选（"decodeKey":"…"、kvReport 串 oid,URL,key,、encfilekey 附近所有数字，UTF-8 和 UTF-16 都搜）→ seedMatches 用“解密后是 ftyp”精确验证。
   正在看（地址带 m= 或请求≥3 次）还找不到钥匙时，退路：内存里找已解密的 ftyp+moov 开头，headerFits 顶层 box 正好接到文件末尾才认，钥匙流=密文开头 XOR 明文开头（Item.ks）。
   条目 Key = lite:<钥匙>，标题只在窗口里同时有这条 encfilekey 时才取 description，否则“视频号视频 时间”。下载用播放器拉的完整地址（itemURLs）。
-  测试 lite_test.go 用假内存+假视频服务器。【待用户 Windows 实测】
+  测试 lite_test.go 用假内存+假视频服务器。【v1.5.1 2026-11-20 用户 Windows 实测下载成功】v1.5.0 的坑：逐个去服务器读开头会卡住，现在由代理转发时 headTap 截开头。
 - inject.js：深度搜索 objectDesc.media，POST 同源 /__sphdl/report；每 2 秒 GET /__sphdl/task 取“链接下载”任务并让微信打开。
 - link.go：weixin.qq.com/sph/xxx → 公开接口 finder-preview/api/feed/get_feed_info（免登录）拿标题/作者/封面/dynamicExportId，
   拼 /web/pages/feed?eid=…，交给页面用 WeixinJSBridge openUrlWithExtraWebview 打开（失败就 location.href），
