@@ -221,6 +221,11 @@ func newProxy(ca tls.Certificate, store *Store, upstream string) *goproxy.ProxyH
 		}
 		host := ctx.Req.URL.Hostname()
 		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if strings.HasSuffix(host, ".video.qq.com") && strings.Contains(ctx.Req.URL.Path, "stodownload") {
+			if ek, want := store.OnLiteMedia(ctx.Req.URL.String(), ct, resp.Header, resp.StatusCode); want && resp.Body != nil && startsAtZero(resp.StatusCode, resp.Header) {
+				resp.Body = &headTap{r: resp.Body, fn: func(b []byte) { store.SetLiteHead(ek, b) }}
+			}
+		}
 		if !strings.Contains(ct, "video") && !strings.Contains(ct, "image") {
 			tracef("%d %s %s%s ct=%s ref=%s origin=%s", resp.StatusCode, ctx.Req.Method, host, ctx.Req.URL.Path, ct,
 				ctx.Req.Header.Get("Referer"), ctx.Req.Header.Get("Origin"))

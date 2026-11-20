@@ -106,6 +106,7 @@ type Item struct {
 	Seen      time.Time `json:"seen"`   // 第一次出现在列表的时间（之后不变，排序稳定）
 	Opened    time.Time `json:"opened"` // 你在微信里打开它 / 粘贴链接的时间；打开过的排在最上面
 	fileKey   string
+	ks        []byte // 自带播放器模式：没有钥匙时用的钥匙流（lite.go）
 }
 
 type linkTask struct {
@@ -132,6 +133,9 @@ type Store struct {
 	currentKey    string // 最近打开的那条（界面上标“正在看”）
 	history       map[string]histEntry
 	histPath      string
+	lite          map[string]*liteMedia // 自带播放器模式看到的视频（lite.go）
+	liteKick      chan struct{}
+	liteSeen      time.Time
 }
 
 func NewStore(dir string) *Store {
@@ -162,6 +166,9 @@ func (s *Store) PageState() string {
 	defer s.mu.Unlock()
 	if time.Since(s.pageSeen) < 10*time.Second {
 		return "online"
+	}
+	if !s.liteSeen.IsZero() && time.Since(s.liteSeen) < 3*time.Minute {
+		return "lite" // 微信自带播放器，在用内存找钥匙的办法
 	}
 	if !s.lastReport.IsZero() && time.Since(s.lastReport) < 10*time.Minute {
 		return "stale"
@@ -668,7 +675,10 @@ func (s *Store) download(it *Item, f FeedInfo) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	resp, err := getWithFallback(candidateURLs(f)...)
+	s.mu.Lock()
+	ks := it.ks
+	s.mu.Unlock()
+	resp, err := getWithFallback(itemURLs(it.Source, f)...)
 	if err != nil {
 		return "", err
 	}
@@ -688,7 +698,11 @@ func (s *Store) download(it *Item, f FeedInfo) (string, error) {
 	it.Progress = 0
 	s.mu.Unlock()
 
-	pr := &progressReader{r: newDecryptReader(resp.Body, seed), onRead: func(n int64) {
+	var body io.Reader = newDecryptReader(resp.Body, seed)
+	if ks != nil {
+		body = &decryptReader{src: resp.Body, ks: ks}
+	}
+	pr := &progressReader{r: body, onRead: func(n int64) {
 		s.mu.Lock()
 		it.Progress += n
 		s.mu.Unlock()
@@ -727,7 +741,7 @@ func (s *Store) ServePreview(w http.ResponseWriter, r *http.Request, key string)
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	req, _ := http.NewRequestWithContext(r.Context(), "GET", candidateURLs(it.FeedInfo)[0], nil)
+	req, _ := http.NewRequestWithContext(r.Context(), "GET", itemURLs(it.Source, it.FeedInfo)[0], nil)
 	if rg := r.Header.Get("Range"); rg != "" {
 		req.Header.Set("Range", rg)
 	}
@@ -754,7 +768,23 @@ func (s *Store) ServePreview(w http.ResponseWriter, r *http.Request, key string)
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.WriteHeader(resp.StatusCode)
+	if it.ks != nil {
+		if offset < int64(len(it.ks)) {
+			io.Copy(w, &decryptReader{src: resp.Body, ks: it.ks, pos: int(offset)})
+		} else {
+			io.Copy(w, resp.Body)
+		}
+		return
+	}
 	io.Copy(w, newDecryptReaderAt(resp.Body, seed, offset))
+}
+
+// itemURLs 自带播放器模式直接用播放器拉的完整地址（清晰度就是播放器选的那档）；只留 encfilekey 的地址是低清版。
+func itemURLs(source string, f FeedInfo) []string {
+	if source == "lite" {
+		return []string{f.URL, originalURL(f.URL)}
+	}
+	return candidateURLs(f)
 }
 
 func getWithFallback(urls ...string) (*http.Response, error) {

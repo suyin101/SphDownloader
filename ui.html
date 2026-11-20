@@ -263,7 +263,7 @@ function render() {
   var st = state;
   $('sniff').checked = st.sniff;
   $('pill').className = 'pill' + (st.sniff && st.online ? ' on' : '');
-  $('pillText').textContent = !st.sniff ? '嗅探已关闭' : st.online ? '视频号已连接' : (st.page === 'stale' ? '视频号需要重开' : '未连接视频号');
+  $('pillText').textContent = !st.sniff ? '嗅探已关闭' : st.online ? (st.page === 'lite' ? '视频号已连接（自带播放器）' : '视频号已连接') : (st.page === 'stale' ? '视频号需要重开' : '未连接视频号');
   $('banner').style.display = st.sniff && st.online ? 'none' : '';
   $('bannerText').innerHTML = !st.sniff
     ? '嗅探已关闭，网络设置已还原。需要下载视频号视频时，打开右上角的<b>嗅探</b>开关。' + (st.sniffErr ? '（' + esc(st.sniffErr) + '）' : '')
@@ -317,7 +317,7 @@ function render() {
 function rowHTML(it) {
   var k = esc(it.key), pct = it.total > 0 ? Math.min(100, it.progress / it.total * 100) : 0;
   var meta = [];
-  meta.push('<span class="src">' + (it.source === 'link' ? '链接' : '嗅探') + '</span>');
+  meta.push('<span class="src">' + (it.source === 'link' ? '链接' : it.source === 'lite' ? '播放器' : '嗅探') + '</span>');
   if (it.nickname) meta.push('<span>' + esc(it.nickname) + '</span>');
   if (it.duration) meta.push('<span>' + dur(it.duration) + '</span>');
   var size = mb(it.total || it.size); if (size) meta.push('<span>' + size + '</span>');

@@ -14,6 +14,13 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   会被微信改走自带播放器 liteapp（日志只见 liteapp.weixin.qq.com、没有 /web/pages/feed），所有同类工具都只抓到图片。
   v1.4.2 起 inject.js 在预览页拦截这个调用，改用 location.replace 在当前网页打开视频页（2026-11-13 对方电脑实测成功）。
   链接下载同理：v1.4.3 起先用新窗口打开，10 秒没打开视频网页就记下 store.inPlace，之后改为 location.href 在当前网页跳转（task 返回 inPlace）。
+- 【自带播放器模式 lite.go，v1.5.0，只在 Windows】微信 4.2 起按账号灰度，左侧“视频号”整个走原生 liteapp：没网页可注入，decodeKey 不走网络
+  （2026-11-19 起用户 Windows 就是这样，一直“未连接”）。做法参考 laoyu20032003/wx_video_downloader：代理在 OnResponse 里把 *.video.qq.com/stodownload
+  视频响应交给 store.OnLiteMedia（网页模式 30 秒内在线就不管）→ liteLoop 取密文前 16 字节 → memscan_windows.go 读 WeChatAppEx.exe（隔次加 Weixin.exe）
+  内存，extractSeeds 宽松收集候选（"decodeKey":"…"、kvReport 串 oid,URL,key,、encfilekey 附近所有数字，UTF-8 和 UTF-16 都搜）→ seedMatches 用“解密后是 ftyp”精确验证。
+  正在看（地址带 m= 或请求≥3 次）还找不到钥匙时，退路：内存里找已解密的 ftyp+moov 开头，headerFits 顶层 box 正好接到文件末尾才认，钥匙流=密文开头 XOR 明文开头（Item.ks）。
+  条目 Key = lite:<钥匙>，标题只在窗口里同时有这条 encfilekey 时才取 description，否则“视频号视频 时间”。下载用播放器拉的完整地址（itemURLs）。
+  测试 lite_test.go 用假内存+假视频服务器。【待用户 Windows 实测】
 - inject.js：深度搜索 objectDesc.media，POST 同源 /__sphdl/report；每 2 秒 GET /__sphdl/task 取“链接下载”任务并让微信打开。
 - link.go：weixin.qq.com/sph/xxx → 公开接口 finder-preview/api/feed/get_feed_info（免登录）拿标题/作者/封面/dynamicExportId，
   拼 /web/pages/feed?eid=…，交给页面用 WeixinJSBridge openUrlWithExtraWebview 打开（失败就 location.href），
