@@ -94,7 +94,8 @@ func candidateURLs(f FeedInfo) []string {
 type Item struct {
 	FeedInfo
 	Key       string    `json:"key"`
-	Source    string    `json:"source"` // sniff 嗅探 / link 链接
+	Source    string    `json:"source"`           // sniff 嗅探 / link 链接 / lite 播放器 / article 公众号图片
+	Images    int       `json:"images,omitempty"` // 公众号文章的图片张数
 	Link      string    `json:"link"`
 	LinkKey   string    `json:"linkKey"`
 	Status    string    `json:"status"`
@@ -106,7 +107,8 @@ type Item struct {
 	Seen      time.Time `json:"seen"`   // 第一次出现在列表的时间（之后不变，排序稳定）
 	Opened    time.Time `json:"opened"` // 你在微信里打开它 / 粘贴链接的时间；打开过的排在最上面
 	fileKey   string
-	ks        []byte // 自带播放器模式：没有钥匙时用的钥匙流（lite.go）
+	ks        []byte   // 自带播放器模式：没有钥匙时用的钥匙流（lite.go）
+	images    []string // 公众号文章的原图地址（article.go）
 }
 
 type linkTask struct {
@@ -326,6 +328,7 @@ func (s *Store) AddLinks(text string) int {
 		s.items[k] = &Item{Key: k, FeedInfo: FeedInfo{ID: k, Title: l.Raw}, Source: "link", Link: l.Raw, LinkKey: l.key(), Status: "resolving", Seen: base, Opened: opened}
 		fresh = append(fresh, l)
 	}
+	arts := s.addArticlesLocked(text, base)
 	s.mu.Unlock()
 	go func() {
 		for _, l := range fresh {
@@ -346,6 +349,55 @@ func (s *Store) AddLinks(text string) int {
 			it.Title, it.Nickname, it.Cover, it.CreateTime = info.Title, info.Nickname, info.Cover, info.CreateTime
 			it.Status = "waiting"
 			s.tasks = append(s.tasks, &linkTask{itemKey: k, exportID: info.ExportID, feedURL: info.FeedURL, state: "pending"})
+			s.mu.Unlock()
+		}
+	}()
+	return len(fresh) + arts
+}
+
+// addArticlesLocked 公众号文章链接：解析出图片后直接下载（不用微信）。
+func (s *Store) addArticlesLocked(text string, base time.Time) int {
+	var fresh []*Item
+	refs := parseArticles(text)
+	for i, a := range refs {
+		opened := base.Add(-time.Duration(i + 1))
+		if it, ok := s.items[a.Key]; ok {
+			it.Opened = opened
+			if it.Status != "error" {
+				continue
+			}
+		}
+		if h, ok := s.history[a.Key]; ok && fileExists(h.File) {
+			s.items[a.Key] = &Item{Key: a.Key, FeedInfo: FeedInfo{ID: a.Key, Title: h.Title, Nickname: h.Nickname, Cover: h.Cover},
+				Source: "article", Link: a.URL, LinkKey: a.Key, Status: "done", File: h.File, Seen: base, Opened: opened}
+			logf("这篇文章之前下载过，不再重复下载：%s", h.Title)
+			continue
+		}
+		it := &Item{Key: a.Key, FeedInfo: FeedInfo{ID: a.Key, Title: a.URL}, Source: "article", Link: a.URL, LinkKey: a.Key, Status: "resolving", Seen: base, Opened: opened}
+		s.items[a.Key] = it
+		fresh = append(fresh, it)
+	}
+	go func() {
+		for _, it := range fresh {
+			info, err := fetchArticle(it.Link)
+			s.mu.Lock()
+			if s.items[it.Key] != it {
+				s.mu.Unlock()
+				continue
+			}
+			if err != nil {
+				it.Status, it.Err = "error", err.Error()
+				logf("公众号文章解析失败 %s：%v", it.Link, err)
+			} else {
+				it.applyArticle(info)
+				kind := "文章"
+				if info.Gallery {
+					kind = "图片消息"
+				}
+				logf("公众号%s：%s，共 %d 张图", kind, label(it), len(info.Images))
+				it.Status = "seen"
+				s.enqueueLocked(it, false)
+			}
 			s.mu.Unlock()
 		}
 	}()
@@ -566,7 +618,13 @@ func (s *Store) worker() {
 		it.Status = "downloading"
 		f := it.FeedInfo
 		s.mu.Unlock()
-		path, err := s.download(it, f)
+		var path string
+		var err error
+		if it.Source == "article" {
+			path, err = s.downloadArticle(it)
+		} else {
+			path, err = s.download(it, f)
+		}
 		s.mu.Lock()
 		if err != nil {
 			it.Status = "error"
@@ -578,7 +636,7 @@ func (s *Store) worker() {
 			s.recordLocked(it)
 			logf("下载完成：%s", filepath.Base(path))
 		}
-		withCover := s.DownloadCover
+		withCover := s.DownloadCover && it.Source != "article"
 		s.mu.Unlock()
 		if err == nil && withCover {
 			s.SaveCover(it.Key)

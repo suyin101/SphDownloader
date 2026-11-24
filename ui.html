@@ -151,13 +151,13 @@
 
     <div class="card">
       <div class="linkbox">
-        <textarea id="links" placeholder="粘贴视频号链接，一行一个，可以一次贴很多条&#10;例如 https://weixin.qq.com/sph/AuQGcNgaw"></textarea>
+        <textarea id="links" placeholder="粘贴视频号或公众号文章链接，一行一个，可以一次贴很多条&#10;视频号 https://weixin.qq.com/sph/AuQGcNgaw&#10;公众号（下载无水印原图） https://mp.weixin.qq.com/s/xxxx"></textarea>
         <div class="side">
           <button class="primary" id="addBtn" onclick="addLinks()">解析并下载</button>
           <button id="pasteBtn" onclick="pasteLinks()">从剪贴板粘贴</button>
         </div>
       </div>
-      <div class="hint">链接下载需要电脑版微信的视频号窗口开着：软件会让微信依次打开每条视频，拿到地址后自动下载。</div>
+      <div class="hint">视频号链接需要电脑版微信的视频号窗口开着：软件会让微信依次打开每条视频，拿到地址后自动下载。公众号文章（含小绿书图片消息）直接下载无水印原图，不用开微信。</div>
     </div>
 
     <div class="card listcard">
@@ -256,7 +256,7 @@ function inTab(it, tab) {
   if (tab === 'active') return ['resolving','waiting','queued','downloading'].indexOf(it.status) >= 0;
   return it.status === tab;
 }
-function canPreview(it) { return it.url && it.key.indexOf('link:') !== 0; }
+function canPreview(it) { return it.url && it.key.indexOf('link:') !== 0 && it.source !== 'article'; }
 function find(key) { return state && state.items.find(function (i) { return i.key === key; }); }
 
 function render() {
@@ -317,10 +317,11 @@ function render() {
 function rowHTML(it) {
   var k = esc(it.key), pct = it.total > 0 ? Math.min(100, it.progress / it.total * 100) : 0;
   var meta = [];
-  meta.push('<span class="src">' + (it.source === 'link' ? '链接' : it.source === 'lite' ? '播放器' : '嗅探') + '</span>');
+  meta.push('<span class="src">' + (it.source === 'link' ? '链接' : it.source === 'lite' ? '播放器' : it.source === 'article' ? '公众号' : '嗅探') + '</span>');
   if (it.nickname) meta.push('<span>' + esc(it.nickname) + '</span>');
   if (it.duration) meta.push('<span>' + dur(it.duration) + '</span>');
-  var size = mb(it.total || it.size); if (size) meta.push('<span>' + size + '</span>');
+  if (it.source === 'article') { if (it.images) meta.push('<span>' + it.images + ' 张图</span>'); }
+  else { var size = mb(it.total || it.size); if (size) meta.push('<span>' + size + '</span>'); }
   if (it.width && it.height) meta.push('<span>' + it.width + '×' + it.height + '</span>');
   var line2 = '';
   if (it.status === 'error') line2 = '<div class="meta"><span class="err">' + esc(it.err) + '</span></div>';
@@ -329,7 +330,7 @@ function rowHTML(it) {
   if (canPreview(it)) ops.push('<button class="link" data-act="preview" data-key="' + k + '">预览</button>');
   if (it.status === 'seen' || it.status === 'error') ops.push('<button class="link" data-act="download" data-key="' + k + '">下载</button>');
   if (it.status === 'done') ops.push('<button class="link" data-act="download" data-key="' + k + '">重新下载</button>');
-  if (it.cover && it.status !== 'resolving') ops.push('<button class="link" data-act="cover" data-key="' + k + '">' + (it.coverFile ? '封面✓' : '下载封面') + '</button>');
+  if (it.cover && it.status !== 'resolving' && it.source !== 'article') ops.push('<button class="link" data-act="cover" data-key="' + k + '">' + (it.coverFile ? '封面✓' : '下载封面') + '</button>');
   if (it.status === 'done') ops.push('<button class="link" data-act="reveal" data-key="' + k + '">打开文件夹</button>');
   var tagText = STATUS[it.status] || it.status;
   if (it.status === 'downloading' && it.total > 0) tagText += ' ' + Math.floor(pct) + '%';
@@ -382,11 +383,12 @@ function pasteLinks() {
 }
 function addLinks() {
   var text = $('links').value.trim();
-  if (!text) { toast('先粘贴视频号链接'); $('links').focus(); return; }
+  if (!text) { toast('先粘贴视频号或公众号文章链接'); $('links').focus(); return; }
   $('addBtn').disabled = true;
   api('links', { text: text }).then(function (r) {
     $('links').value = '';
-    toast('已添加 ' + r.n + ' 个链接' + (!state.sniff ? '。链接下载需要先打开右上角的“嗅探”' : state.online ? '，正在交给微信打开' : '，请打开微信视频号'));
+    var onlyMp = !/weixin\.qq\.com\/sph\/|finder-preview|[?&]eid=/.test(text);
+    toast('已添加 ' + r.n + ' 个链接' + (onlyMp ? '，正在下载图片' : !state.sniff ? '。视频号链接需要先打开右上角的“嗅探”' : state.online ? '，正在交给微信打开' : '，请打开微信视频号'));
     filter = 'all';
   }).catch(fail).finally(function () { $('addBtn').disabled = false; });
 }

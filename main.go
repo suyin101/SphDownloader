@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	version = "1.5.1"
+	version = "1.6.0"
 	uiPort  = 18889
 )
 
@@ -353,7 +353,7 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 	mux.HandleFunc("/api/links", post(func(b apiBody) (any, error) {
 		n := store.AddLinks(b.Text)
 		if n == 0 {
-			return nil, fmt.Errorf("没找到新的视频号链接。支持 https://weixin.qq.com/sph/xxxx 这种格式")
+			return nil, fmt.Errorf("没找到新的链接。支持视频号 https://weixin.qq.com/sph/xxxx 和公众号文章 https://mp.weixin.qq.com/s/xxxx")
 		}
 		logf("添加了 %d 个链接", n)
 		return map[string]int{"n": n}, nil
