@@ -27,6 +27,9 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   页面上报 current 时按 href 里的 eid 对上任务，强制下载。一次只开一个，25 秒超时重试 2 次。【链接下载 2026-11-13 实测成功】
 - 【原画已封】2026-11-19 调研：地址里 basedata 是签过名的可下载档位名单（只有 xWT111/112/113/126/127/128 + 音频 xA0/xA2），原片不在名单里，改参数无效。
   ltaoo #562/#581、nobiyou #98、qiye45 #178、putyy #416 都确认 2026-08 底起原画下不了，最高就是微信给的转码档（常见 720，部分视频有 1080）。微信再放开时再看。
+- article.go（v1.6.0）：公众号文章链接 mp.weixin.qq.com/s/xxx 或 s?__biz=… 直接下图片，不用微信、不用嗅探。小绿书（item_show_type=8）取 picture_page_info_list
+  每个对象里第一个 cdn_url（原图，无水印；watermark_info.cdn_url 是带「公众号 · 名字」水印的）；普通文章取 #js_content 的 data-src，/640? 换 /0? 原尺寸。
+  存成「作者_标题_日期/01.png…」文件夹，条目 Key=mp:…，Source=article。2026-11-24 实测小绿书 10 张、普通文章 7 张都成功。
 - history.go：下载记录 history.json，下过的视频/链接不再自动重下（手动“重新下载”除外）。sniffer.go：嗅探开关，关=还原代理+关端口+断开连接。
 - store.go：下载队列（3 并发）。【清晰度】只留 encfilekey/token 的“原画质”地址实测只有 1024×576/350kbps；v1.4.4 起 inject.js 上报 media.spec 档位，
   candidateURLs 先用完整地址 + &X-snsvideoflag=最高档（levelOrder 最小的正数，同档比码率，参照 ltaoo PickHighestSpec），失败再退回旧地址。封面，/api/preview 边下边解密（支持 Range）。
