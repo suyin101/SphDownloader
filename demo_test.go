@@ -39,6 +39,9 @@ func TestUIDemo(t *testing.T) {
 		add(Item{Key: "8", Source: "lite", Status: "done", File: real, Total: 12 << 20, FeedInfo: FeedInfo{Title: "视频号视频 11-26 17:20", Duration: 74, URL: "u"}}, 0)
 		s.items["8"].Cover = ""
 	}
+	add(Item{Key: "xhs:1", Source: "xhs", Status: "done", Tx: "done", TxFile: txtFor(v2), File: v2, Total: 10 << 20, FeedInfo: FeedInfo{Title: "挡风被真的是“温柔杀”", Nickname: "小田的电驴日记", Duration: 26, Width: 720, Height: 1280, URL: "u"}}, 0)
+	add(Item{Key: "xhs:2", Source: "xhs", Status: "done", Images: 2, File: vdir, FeedInfo: FeedInfo{Title: "你会喜欢目前这个 AI 所做的设计吗？", Nickname: "Man龙"}}, 0)
+	add(Item{Key: "xhs:s:3", Source: "xhs", Status: "resolving", FeedInfo: FeedInfo{Title: "https://xhslink.cn/o/8c0riArKjjH"}}, 0)
 	add(Item{Key: "6", Source: "link", Status: "done", Tx: "running", TxPct: 45, File: v2 + "x", Total: 12 << 20, FeedInfo: FeedInfo{Title: "孩子越催越摆烂？父母到底应该怎么办？", Nickname: "扶鹰王金海家庭教育", Duration: 74, URL: "u"}}, 0)
 	add(Item{Key: "7", Source: "sniff", Status: "done", Tx: "error", TxErr: "没识别到人声（可能是纯音乐或只有花字）", File: v2 + "y", Total: 2 << 20, FeedInfo: FeedInfo{Title: "无标题", Nickname: "小涵宝同学", Duration: 8, URL: "u"}}, 0)
 	add(Item{Key: "2", Source: "sniff", Status: "done", File: v2, CoverFile: "x.jpg", Total: 76 << 20, FeedInfo: FeedInfo{Title: "为什么是最后一期？影视飓风1800万粉丝Q&A！#日常", Nickname: "影视飓风MediaStorm", Duration: 1133, URL: "u"}}, 2)

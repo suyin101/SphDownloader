@@ -43,6 +43,17 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   v1.7.1：转文字进度（识别程序边识别边输出，按“识别到第几秒/总时长”算，TxPct）；“转文字”按钮只在勾选后显示；文案窗口可“重新转文字”。
 - 【缩略图 v1.7.1】封面经 /api/coverimg 由软件代取（Windows 网页控件直接加载微信图片可能失败）；自带播放器模式没有封面，界面用 /api/preview 截视频第 1 秒一帧（pumpFrames，一次一个）。
   界面截图用 Electron（headless Chrome 不支持 H.264）：AutoCut 的 node_modules/.bin/electron 离屏打开 DEMO 页面 capturePage。
+- 【小红书 v1.8.0】xhs.go：识别 xhslink.cn/o/…、xiaohongshu.com/discovery/item|explore/<24位id>（整段分享文字直接贴），手机 UA 打开分享页读 window.__INITIAL_STATE__（undefined 要换成 null），
+  findNote 找有 noteId+imageList 的对象。图片原图 = sns-img-bd.xhscdn.com/<fileId>（无水印，原上传尺寸）；视频取 media.stream.h264 最大一档，masterUrl 带 sign 参数，
+  backupUrls（sns-bak-*）也能下，备用排前面（Item.FeedInfo.alt）。视频笔记 Source=xhs 走普通下载/预览/转文字；图文笔记 isPics() 走 downloadArticle 存图片文件夹 + 正文.txt。
+  store.addWebLocked 统一处理公众号和小红书（parseWebRefs/fetchWeb），短链接 Key=xhs:s:<短码>，解析后 ID=xhs:<笔记id>。2026-11-26 用户给的两条链接实测下载成功。
+- 【抖音 v1.8.0，做法 B】douyin.go + douyin_hook.js + douyin_darwin.m/.go（隐藏 NSWindow+WKWebView，默认数据存储记住游客身份）/ douyin_windows.go（单独线程的 WebView2，DataPath=webview2-douyin，ShowWindow 隐藏）。
+  短链 v.douyin.com 只用 HTTP 取跳转里的作品 ID，然后隐藏网页打开 www.douyin.com/video/<id>，hook 旁听网页自己请求的 /aweme/v1/web/aweme/detail/（签名、Cookie 都是抖音网页自己做的），
+  取 bit_rate 里最清晰的 h264 play_addr（无水印），图文取 images[].url_list（download_url_list 带水印）。下载要带 Referer（setReferer）。同一时间只开一个隐藏网页（douyinBusy）。
+  【坑】抖音每次打开都有后台“无感验证”（隐形 verifycenter iframe），别当成验证码；只认显示出来、够大的验证框，连续 3 次（约 6 秒）才弹窗让用户手动过。
+  2026-11-26 Mac 实测：不登录 5～10 秒拿到 1080×1440 无水印视频，转文字正常。Windows 未实测，抖音图文未实测（没有样例链接）。
+  测试：`DY_LIVE="分享文字" go test -count=1 -run TestDouyinLive -v`（Mac，TestMain 在主线程跑 Cocoa 事件循环）；注意 go test 会缓存结果，要 -count=1。
+  做法 A（a_bogus 签名直接调接口）：Evil0ctal/Douyin_TikTok_Download_API v5（Apache-2.0）有纯 Python 实现，但 Claude Code 自动安全检查会拦，用户说以后再研究。
 - history.go：下载记录 history.json，下过的视频/链接不再自动重下（手动“重新下载”除外）。sniffer.go：嗅探开关，关=还原代理+关端口+断开连接。
 - store.go：下载队列（3 并发）。【清晰度】只留 encfilekey/token 的“原画质”地址实测只有 1024×576/350kbps；v1.4.4 起 inject.js 上报 media.spec 档位，
   candidateURLs 先用完整地址 + &X-snsvideoflag=最高档（levelOrder 最小的正数，同档比码率，参照 ltaoo PickHighestSpec），失败再退回旧地址。封面，/api/preview 边下边解密（支持 Range）。

@@ -249,16 +249,17 @@ func (s *Store) downloadArticle(it *Item) (string, error) {
 	s.mu.Lock()
 	imgs, link, dir, f := it.images, it.Link, s.Dir, it.FeedInfo
 	s.mu.Unlock()
-	if len(imgs) == 0 { // 解析失败后点“下载”重试
-		info, err := fetchArticle(link)
-		if err != nil {
+	if len(imgs) == 0 { // 解析失败后点“下载”重试，或者重启软件后从下载记录里点“重新下载”
+		tmp := &Item{Source: it.Source, Link: link}
+		if err := fetchWeb(tmp); err != nil {
 			return "", err
 		}
 		s.mu.Lock()
-		it.applyArticle(info)
+		it.FeedInfo, it.images, it.Images, it.Desc = tmp.FeedInfo, tmp.images, tmp.Images, tmp.Desc
 		imgs, f = it.images, it.FeedInfo
 		s.mu.Unlock()
 	}
+	desc := it.Desc
 	folder := uniquePath(filepath.Join(dir, articleDirName(f)))
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return "", err
@@ -276,6 +277,9 @@ func (s *Store) downloadArticle(it *Item) (string, error) {
 		it.Progress = int64(i + 1)
 		s.mu.Unlock()
 	}
+	if desc != "" { // 小红书图文的正文
+		os.WriteFile(filepath.Join(folder, "正文.txt"), []byte("\xEF\xBB\xBF"+f.Title+"\n\n"+desc+"\n"), 0o644)
+	}
 	if failed == len(imgs) {
 		os.Remove(folder)
 		return "", fmt.Errorf("图片全部下载失败")
@@ -290,7 +294,10 @@ func saveImage(u, base string) error {
 	var resp *http.Response
 	var err error
 	for try := 0; try < 3; try++ {
-		resp, err = client.Get(u)
+		req, _ := http.NewRequest("GET", u, nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
+		setReferer(req)
+		resp, err = client.Do(req)
 		if err == nil && resp.StatusCode == 200 {
 			break
 		}
@@ -331,7 +338,7 @@ func (it *Item) applyArticle(info *articleInfo) {
 	if it.Cover == "" && len(info.Images) > 0 {
 		it.Cover = info.Images[0]
 	}
-	it.images = info.Images
+	it.images, it.gallery = info.Images, info.Gallery
 	it.Images = len(info.Images)
 	if it.Title == "" {
 		it.Title = "公众号文章"

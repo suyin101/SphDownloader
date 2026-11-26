@@ -16,18 +16,19 @@ import (
 )
 
 type FeedInfo struct {
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	Nickname   string `json:"nickname"`
-	URL        string `json:"url"`
-	DecodeKey  string `json:"decodeKey"`
-	Cover      string `json:"cover"`
-	Duration   int    `json:"duration"`
-	Size       int64  `json:"size"`
-	CreateTime int64  `json:"createtime"`
-	Width      int    `json:"width"`
-	Height     int    `json:"height"`
-	Specs      []Spec `json:"specs,omitempty"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Nickname   string   `json:"nickname"`
+	URL        string   `json:"url"`
+	DecodeKey  string   `json:"decodeKey"`
+	Cover      string   `json:"cover"`
+	Duration   int      `json:"duration"`
+	Size       int64    `json:"size"`
+	CreateTime int64    `json:"createtime"`
+	Width      int      `json:"width"`
+	Height     int      `json:"height"`
+	Specs      []Spec   `json:"specs,omitempty"`
+	alt        []string // 备用下载地址（小红书）
 }
 
 // Spec 视频号给每条视频转好的几个清晰度档位（xWT111 等）。
@@ -94,8 +95,9 @@ func candidateURLs(f FeedInfo) []string {
 type Item struct {
 	FeedInfo
 	Key       string    `json:"key"`
-	Source    string    `json:"source"`           // sniff 嗅探 / link 链接 / lite 播放器 / article 公众号图片
-	Images    int       `json:"images,omitempty"` // 公众号文章的图片张数
+	Source    string    `json:"source"`           // sniff 嗅探 / link 链接 / lite 播放器 / article 公众号图片 / xhs 小红书
+	Images    int       `json:"images,omitempty"` // 图片张数（公众号文章、小红书图文）
+	Desc      string    `json:"desc,omitempty"`   // 正文（小红书笔记）
 	Link      string    `json:"link"`
 	LinkKey   string    `json:"linkKey"`
 	Status    string    `json:"status"`
@@ -115,6 +117,7 @@ type Item struct {
 	txChecked bool     // 已检查过视频旁边有没有现成的 .txt
 	ks        []byte   // 自带播放器模式：没有钥匙时用的钥匙流（lite.go）
 	images    []string // 公众号文章的原图地址（article.go）
+	gallery   bool     // 公众号小绿书（图片消息）
 }
 
 type linkTask struct {
@@ -337,7 +340,7 @@ func (s *Store) AddLinks(text string) int {
 		s.items[k] = &Item{Key: k, FeedInfo: FeedInfo{ID: k, Title: l.Raw}, Source: "link", Link: l.Raw, LinkKey: l.key(), Status: "resolving", Seen: base, Opened: opened}
 		fresh = append(fresh, l)
 	}
-	arts := s.addArticlesLocked(text, base)
+	arts := s.addWebLocked(text, base)
 	s.mu.Unlock()
 	go func() {
 		for _, l := range fresh {
@@ -364,11 +367,66 @@ func (s *Store) AddLinks(text string) int {
 	return len(fresh) + arts
 }
 
-// addArticlesLocked 公众号文章链接：解析出图片后直接下载（不用微信）。
-func (s *Store) addArticlesLocked(text string, base time.Time) int {
+// webRef 不用微信、直接从网页解析的链接：公众号文章、小红书笔记。
+type webRef struct {
+	URL, Key, Source string
+}
+
+func parseWebRefs(text string) []webRef {
+	var out []webRef
+	for _, a := range parseArticles(text) {
+		out = append(out, webRef{a.URL, a.Key, "article"})
+	}
+	for _, x := range parseXHS(text) {
+		out = append(out, webRef{x.URL, x.Key, "xhs"})
+	}
+	out = append(out, parseDouyin(text)...)
+	return out
+}
+
+// fetchWeb 按来源解析一条链接，结果填进条目。
+func fetchWeb(it *Item) error {
+	switch it.Source {
+	case "xhs", "douyin":
+		fetch, prefix := fetchXHS, "xhs:"
+		if it.Source == "douyin" {
+			fetch, prefix = fetchDouyin, "dy:"
+		}
+		p, err := fetch(it.Link)
+		if err != nil {
+			return err
+		}
+		it.applyWebPost(p, prefix)
+	default:
+		info, err := fetchArticle(it.Link)
+		if err != nil {
+			return err
+		}
+		it.applyArticle(info)
+	}
+	return nil
+}
+
+func webKind(it *Item) string {
+	name := map[string]string{"xhs": "小红书", "douyin": "抖音"}[it.Source]
+	switch {
+	case name != "" && it.URL != "":
+		return name + "视频"
+	case name != "":
+		return name + "图文"
+	}
+	return "公众号文章"
+}
+
+// isPics 图片类条目（公众号文章、小红书图文）：存成图片文件夹，不能预览、不能转文字。
+func (it *Item) isPics() bool {
+	return it.Source == "article" || ((it.Source == "xhs" || it.Source == "douyin") && it.URL == "" && it.Images > 0)
+}
+
+// addWebLocked 公众号文章、小红书链接：解析出内容后直接下载（不用微信）。
+func (s *Store) addWebLocked(text string, base time.Time) int {
 	var fresh []*Item
-	refs := parseArticles(text)
-	for i, a := range refs {
+	for i, a := range parseWebRefs(text) {
 		opened := base.Add(-time.Duration(i + 1))
 		if it, ok := s.items[a.Key]; ok {
 			it.Opened = opened
@@ -376,19 +434,38 @@ func (s *Store) addArticlesLocked(text string, base time.Time) int {
 				continue
 			}
 		}
-		if h, ok := s.history[a.Key]; ok && fileExists(h.File) {
-			s.items[a.Key] = &Item{Key: a.Key, FeedInfo: FeedInfo{ID: a.Key, Title: h.Title, Nickname: h.Nickname, Cover: h.Cover},
-				Source: "article", Link: a.URL, LinkKey: a.Key, Status: "done", File: h.File, Seen: base, Opened: opened}
-			logf("这篇文章之前下载过，不再重复下载：%s", h.Title)
+		dup := false
+		for _, it := range s.items {
+			if it.LinkKey == a.Key && it.Key != a.Key { // 短链接已经解析成笔记了
+				it.Opened, dup = opened, true
+			}
+		}
+		if dup {
 			continue
 		}
-		it := &Item{Key: a.Key, FeedInfo: FeedInfo{ID: a.Key, Title: a.URL}, Source: "article", Link: a.URL, LinkKey: a.Key, Status: "resolving", Seen: base, Opened: opened}
+		h, ok := s.history[a.Key]
+		if !ok || !fileExists(h.File) {
+			if id, hh := s.downloadedLinkLocked(a.Key); id != "" {
+				h, ok = hh, true
+			}
+		}
+		if ok && fileExists(h.File) {
+			s.items[a.Key] = &Item{Key: a.Key, FeedInfo: FeedInfo{ID: a.Key, Title: h.Title, Nickname: h.Nickname, Cover: h.Cover},
+				Source: a.Source, Link: a.URL, LinkKey: a.Key, Status: "done", File: h.File, Seen: base, Opened: opened}
+			if !strings.EqualFold(filepath.Ext(h.File), ".mp4") {
+				s.items[a.Key].Images = 1 // 图片文件夹
+			}
+			logf("这个链接之前下载过，不再重复下载：%s", h.Title)
+			continue
+		}
+		it := &Item{Key: a.Key, FeedInfo: FeedInfo{ID: a.Key, Title: a.URL}, Source: a.Source, Link: a.URL, LinkKey: a.Key, Status: "resolving", Seen: base, Opened: opened}
 		s.items[a.Key] = it
 		fresh = append(fresh, it)
 	}
 	go func() {
 		for _, it := range fresh {
-			info, err := fetchArticle(it.Link)
+			tmp := &Item{Source: it.Source, Link: it.Link}
+			err := fetchWeb(tmp)
 			s.mu.Lock()
 			if s.items[it.Key] != it {
 				s.mu.Unlock()
@@ -396,17 +473,34 @@ func (s *Store) addArticlesLocked(text string, base time.Time) int {
 			}
 			if err != nil {
 				it.Status, it.Err = "error", err.Error()
-				logf("公众号文章解析失败 %s：%v", it.Link, err)
-			} else {
-				it.applyArticle(info)
+				logf("解析失败 %s：%v", it.Link, err)
+				s.mu.Unlock()
+				continue
+			}
+			id := it.ID
+			it.FeedInfo, it.images, it.Images, it.Desc = tmp.FeedInfo, tmp.images, tmp.Images, tmp.Desc
+			if it.ID == "" {
+				it.ID = id
+			}
+			if file := s.downloadedLocked(it.ID); file != "" { // 笔记以前下载过（换了个分享链接）
+				it.Status, it.File = "done", file
+				logf("这条之前下载过，不再重复下载：%s", label(it))
+				s.mu.Unlock()
+				continue
+			}
+			if it.Source == "article" {
 				kind := "文章"
-				if info.Gallery {
+				if tmp.gallery {
 					kind = "图片消息"
 				}
-				logf("公众号%s：%s，共 %d 张图", kind, label(it), len(info.Images))
-				it.Status = "seen"
-				s.enqueueLocked(it, false)
+				logf("公众号%s：%s，共 %d 张图", kind, label(it), it.Images)
+			} else if it.isPics() {
+				logf("%s：%s，共 %d 张图", webKind(it), label(it), it.Images)
+			} else {
+				logf("%s：%s", webKind(it), label(it))
 			}
+			it.Status = "seen"
+			s.enqueueLocked(it, false)
 			s.mu.Unlock()
 		}
 	}()
@@ -633,7 +727,7 @@ func (s *Store) worker() {
 		s.mu.Unlock()
 		var path string
 		var err error
-		if it.Source == "article" {
+		if it.isPics() {
 			path, err = s.downloadArticle(it)
 		} else {
 			path, err = s.download(it, f)
@@ -648,12 +742,12 @@ func (s *Store) worker() {
 			it.File = path
 			s.recordLocked(it)
 			logf("下载完成：%s", filepath.Base(path))
-			if it.Source != "article" && (it.wantTx || s.AutoTranscribe) {
+			if !it.isPics() && (it.wantTx || s.AutoTranscribe) {
 				s.queueTxLocked(it, it.wantTx)
 			}
 		}
 		it.wantTx = false
-		withCover := s.DownloadCover && it.Source != "article"
+		withCover := s.DownloadCover && !it.isPics()
 		s.mu.Unlock()
 		if err == nil && withCover {
 			s.SaveCover(it.Key)
@@ -821,6 +915,7 @@ func (s *Store) ServePreview(w http.ResponseWriter, r *http.Request, key string)
 		req.Header.Set("Range", rg)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
+	setReferer(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), 502)
@@ -859,6 +954,9 @@ func itemURLs(source string, f FeedInfo) []string {
 	if source == "lite" {
 		return []string{f.URL, originalURL(f.URL)}
 	}
+	if source == "xhs" || source == "douyin" {
+		return append([]string{f.URL}, f.alt...)
+	}
 	return candidateURLs(f)
 }
 
@@ -872,6 +970,7 @@ func getWithFallback(urls ...string) (*http.Response, error) {
 		tried[u] = true
 		req, _ := http.NewRequest("GET", u, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
+		setReferer(req)
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
@@ -966,7 +1065,7 @@ func label(it *Item) string {
 
 // syncTxLocked 视频旁边已经有同名 .txt 的，直接算转过了（重启软件后也认得）。
 func (s *Store) syncTxLocked(it *Item) {
-	if it.txChecked || it.Status != "done" || it.Source == "article" || it.File == "" {
+	if it.txChecked || it.Status != "done" || it.isPics() || it.File == "" {
 		return
 	}
 	it.txChecked = true
@@ -983,7 +1082,7 @@ func (s *Store) Transcribe(keys []string) (queued, downloading int) {
 	defer s.mu.Unlock()
 	for _, k := range keys {
 		it, ok := s.items[k]
-		if !ok || it.Source == "article" {
+		if !ok || it.isPics() {
 			continue
 		}
 		if strings.HasPrefix(k, "link:") { // 链接还没拿到视频（在等微信打开）：下完再转

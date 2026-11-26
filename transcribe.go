@@ -353,7 +353,7 @@ func (t *Transcriber) worker() {
 	for it := range t.queue {
 		s := t.store
 		s.mu.Lock()
-		if it.Tx != "queued" || it.File == "" || s.items[it.Key] != it { // 排队期间被移除了
+		if it.Tx != "queued" || it.File == "" || it.isPics() || s.items[it.Key] != it { // 排队期间被移除了
 			s.mu.Unlock()
 			continue
 		}
