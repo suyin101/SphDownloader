@@ -27,7 +27,15 @@ ls -lh dist/SphDownloader-*
 
 if [ "$1" = "--publish" ]; then
   NOTES="${2:-v$VER}"
+  # 转文字组件（只传一次，固定在 asr-v1，不能成为 latest，否则自动更新会找错）
+  if ! gh release view asr-v1 >/dev/null 2>&1; then
+    P=asr-build/pack; M=$(ls -d asr-build/sv24/*/ 2>/dev/null | head -1)
+    [ -f $P/asr-runtime-mac-arm64.zip ] && [ -f "$M/model.int8.onnx" ] || { echo "缺 asr-build（见 CLAUDE.md 转文字一节）"; exit 1; }
+    gh release create asr-v1 $P/asr-runtime-mac-arm64.zip $P/asr-runtime-mac-x86_64.zip $P/asr-runtime-windows-amd64.zip \
+      "$M/model.int8.onnx" "$M/tokens.txt" --latest=false --title "转文字组件 v1" \
+      --notes "视频号下载器的转文字组件（sherpa-onnx v2.0.3 + SenseVoice int8 2024-07-17 + silero VAD），软件第一次转文字时自动下载，不用手动装。"
+  fi
   gh release create "v$VER" dist/SphDownloader-windows.zip dist/SphDownloader-windows.exe dist/SphDownloader-mac.zip \
-    --title "v$VER" --notes "$NOTES"
+    --title "v$VER" --notes "$NOTES" --latest
   echo "已发布 v$VER"
 fi

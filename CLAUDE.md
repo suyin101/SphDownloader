@@ -30,6 +30,15 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
 - article.go（v1.6.0）：公众号文章链接 mp.weixin.qq.com/s/xxx 或 s?__biz=… 直接下图片，不用微信、不用嗅探。小绿书（item_show_type=8）取 picture_page_info_list
   每个对象里第一个 cdn_url（原图，无水印；watermark_info.cdn_url 是带「公众号 · 名字」水印的）；普通文章取 #js_content 的 data-src，/640? 换 /0? 原尺寸。
   存成「作者_标题_日期/01.png…」文件夹，条目 Key=mp:…，Source=article。2026-11-24 实测小绿书 10 张、普通文章 7 张都成功。
+- 【转文字 v1.7.0】transcribe.go + mp4audio.go：给编导看文案用，本机识别、不上传。列表“转文字”/批量“转文字”（没下载的先下载再转），设置“下载完自动转文字”（默认关）。
+  结果只存和视频同名的 .txt（标题、作者/发布/时长一行，正文按停顿>1.2 秒或满 160 字分段，带 BOM，Windows 用 CRLF）；视频旁有同名 .txt 就算转过（syncTxLocked）。
+  声音：mp4audio.go 纯 Go 拆 mp4 + skrashevich/go-aac 解 AAC-LC；HE-AAC/HE-AACv2 改写 ASC 只解基础层（coreASC，采样率减半、单声道，识别不受影响）。不用 ffmpeg。
+  识别：sherpa-onnx v2.0.3 命令行 sherpa-onnx-vad-with-offline-asr（改名 sherpa-asr）+ silero_vad + SenseVoice int8 **2024-07-17**（2025-09-09 版没有标点，别换）。
+  调用时 cmd.Dir=组件目录、参数全用相对路径（Windows 用户名有中文时命令行程序读不了中文路径）；Windows 用 static-MT 版单个 exe，不依赖 VC++ 运行库。
+  组件在 dataDir/asr，第一次用时下载（约 248MB，断点续传 + sha256 校验）：程序包 asr-runtime-<平台>.zip 只在 GitHub 发布 asr-v1（--latest=false！）；
+  模型 model.int8.onnx/tokens.txt 先 hf-mirror.com，再 huggingface.co，再 asr-v1。asr-build/（gitignore）里有原始下载和 pack/ 打包结果，release.sh 首次发版时自动建 asr-v1。
+  速度（M 系列 Mac）：74 秒视频 2.6 秒，12 分钟视频 4 秒。测试：`ASR_DIR=装好组件的目录 SAMPLE_MP4=x.mp4 go test -run TestTranscribeLive -v`；
+  `AUDIO_DIR=一批mp4 go test -run TestDecodeMP4Audio -v` 检查解声音。
 - history.go：下载记录 history.json，下过的视频/链接不再自动重下（手动“重新下载”除外）。sniffer.go：嗅探开关，关=还原代理+关端口+断开连接。
 - store.go：下载队列（3 并发）。【清晰度】只留 encfilekey/token 的“原画质”地址实测只有 1024×576/350kbps；v1.4.4 起 inject.js 上报 media.spec 档位，
   candidateURLs 先用完整地址 + &X-snsvideoflag=最高档（levelOrder 最小的正数，同档比码率，参照 ltaoo PickHighestSpec），失败再退回旧地址。封面，/api/preview 边下边解密（支持 Range）。

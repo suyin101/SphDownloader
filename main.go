@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	version = "1.6.0"
+	version = "1.7.0"
 	uiPort  = 18889
 )
 
@@ -50,6 +50,7 @@ type config struct {
 	DownloadCover bool   `json:"downloadCover"`
 	Sniff         *bool  `json:"sniff"`
 	AutoUpdate    *bool  `json:"autoUpdate"`
+	AutoTx        bool   `json:"autoTranscribe"`
 }
 
 func loadConfig() config {
@@ -151,6 +152,8 @@ func main() {
 		store.AutoDownload = *cfg.AutoDownload
 	}
 	store.DownloadCover = cfg.DownloadCover
+	store.AutoTranscribe = cfg.AutoTx
+	store.tx = NewTranscriber(filepath.Join(dataDir, "asr"), store)
 	store.loadHistory(filepath.Join(dataDir, "history.json"))
 
 	sniffer = &Sniffer{ca: ca, store: store}
@@ -254,6 +257,7 @@ type apiBody struct {
 	Cover      *bool    `json:"cover"`
 	On         *bool    `json:"on"`
 	AutoUpdate *bool    `json:"autoUpdate"`
+	AutoTx     *bool    `json:"autoTranscribe"`
 }
 
 func uiHandler(store *Store, cfg *config) http.Handler {
@@ -276,8 +280,12 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		logs := append([]string(nil), logLines...)
 		logMu.Unlock()
 		store.mu.Lock()
-		dir, auto, cover := store.Dir, store.AutoDownload, store.DownloadCover
+		dir, auto, cover, autoTx := store.Dir, store.AutoDownload, store.DownloadCover, store.AutoTranscribe
 		store.mu.Unlock()
+		var asr any
+		if store.tx != nil {
+			asr = store.tx.State()
+		}
 		cfgMu.Lock()
 		autoUpd := cfg.AutoUpdate == nil || *cfg.AutoUpdate
 		cfgMu.Unlock()
@@ -288,7 +296,7 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]any{
 			"version": version, "items": items, "logs": logs, "dir": dir,
-			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent,
+			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent, "autoTranscribe": autoTx, "asr": asr,
 		})
 	})
 	mux.HandleFunc("/api/preview", func(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +339,23 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		}()
 		return nil, nil
 	}))
+	mux.HandleFunc("/api/transcribe", post(func(b apiBody) (any, error) {
+		q, d := store.Transcribe(b.Keys)
+		if q+d == 0 {
+			return nil, fmt.Errorf("选中的视频已经转过文字，或者正在转")
+		}
+		return map[string]int{"queued": q, "downloading": d}, nil
+	}))
+	mux.HandleFunc("/api/transcript", post(func(b apiBody) (any, error) {
+		if len(b.Keys) != 1 {
+			return nil, fmt.Errorf("参数不对")
+		}
+		txt, file, err := store.Transcript(b.Keys[0])
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"text": txt, "file": file}, nil
+	}))
 	mux.HandleFunc("/api/clear", post(func(b apiBody) (any, error) {
 		return map[string]int{"n": store.Clear()}, nil
 	}))
@@ -366,11 +391,15 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		if b.Cover != nil {
 			store.DownloadCover = *b.Cover
 		}
-		auto, cover := store.AutoDownload, store.DownloadCover
+		if b.AutoTx != nil {
+			store.AutoTranscribe = *b.AutoTx
+		}
+		auto, cover, autoTx := store.AutoDownload, store.DownloadCover, store.AutoTranscribe
 		store.mu.Unlock()
 		save(func(c *config) {
 			c.AutoDownload = &auto
 			c.DownloadCover = cover
+			c.AutoTx = autoTx
 			if b.AutoUpdate != nil {
 				c.AutoUpdate = b.AutoUpdate
 			}

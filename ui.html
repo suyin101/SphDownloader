@@ -113,6 +113,14 @@
   .player .pbar { display:flex; gap:8px; align-items:center; padding:10px 14px; background:#18181b; color:#ddd; }
   .player .pbar .pt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .player .pbar button { background:#2a2a2e; border-color:#3a3a3f; color:#eee; }
+  .tag.tx { background:var(--blue-weak); color:var(--blue); }
+  button.link.txt { color:var(--brand); font-weight:500; }
+  button.link.txt:hover:not(:disabled) { background:var(--brand-weak); }
+  .txdlg { width:min(720px,100%); display:flex; flex-direction:column; max-height:86vh; }
+  .txdlg h3 { margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .txdlg .sub { color:var(--muted); font-size:12px; margin-bottom:12px; }
+  .txdlg textarea { flex:1; min-height:320px; resize:none; border:1px solid var(--line); border-radius:8px; padding:12px 14px; font:14px/1.8 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); outline:none; }
+  .txdlg .dfoot { margin-top:12px; }
   .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(20px); background:rgba(29,33,41,.92); color:#fff; padding:8px 16px; border-radius:8px; opacity:0; transition:all .2s; pointer-events:none; z-index:20; max-width:80%; }
   .toast.show { opacity:1; transform:translateX(-50%); }
   @media (max-width:640px) {
@@ -144,6 +152,9 @@
       <span>🎉</span><span class="grow" id="updText"></span>
       <button class="primary" id="updBtn" onclick="applyUpdate()">立即更新</button>
     </div>
+    <div class="banner upd" id="asrBanner" style="display:none">
+      <span>📝</span><span class="grow" id="asrText"></span>
+    </div>
     <div class="banner" id="banner">
       <span>👉</span>
       <span id="bannerText"></span>
@@ -167,6 +178,7 @@
         <span class="grow"></span>
         <label class="chk"><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)">全选</label>
         <button id="bDl" onclick="batch('download')" disabled>下载选中</button>
+        <button id="bTx" onclick="batch('transcribe')" disabled title="把视频里说的话转成文字，存成同名 .txt（在本机识别，不上传）">转文字</button>
         <button id="bCover" onclick="batch('cover')" disabled>下载封面</button>
         <button id="bRm" class="danger" onclick="batch('remove')" disabled>移除</button>
         <button id="bClear" class="danger" onclick="clearList()">清空列表</button>
@@ -209,6 +221,10 @@
       <input type="checkbox" id="optCover" onchange="setOpt({cover:this.checked})">
     </div>
     <div class="switch">
+      <div>下载完自动转文字<small id="asrInfo">视频下载完后，把说的话转成同名 .txt 文案（在本机识别，不上传）</small></div>
+      <input type="checkbox" id="optTx" onchange="setOpt({autoTranscribe:this.checked})">
+    </div>
+    <div class="switch">
       <div>自动更新<small>打开软件时有新版本就自动安装（正在下载视频时不会打断）</small></div>
       <input type="checkbox" id="optUpd" onchange="setOpt({autoUpdate:this.checked})">
     </div>
@@ -219,6 +235,18 @@
     <div class="dfoot">
       <span></span>
       <span><button class="danger" onclick="quitApp()">退出软件</button> <button class="primary" onclick="hide('setMask')">完成</button></span>
+    </div>
+  </div>
+</div>
+
+<div class="mask" id="txMask" onclick="if(event.target===this)hide('txMask')">
+  <div class="dialog txdlg">
+    <h3 id="txTitle">文案</h3>
+    <div class="sub" id="txSub"></div>
+    <textarea id="txText" readonly></textarea>
+    <div class="dfoot">
+      <span id="txCount"></span>
+      <span><button id="txReveal">打开所在文件夹</button> <button class="primary" id="txCopy">复制全部</button> <button onclick="hide('txMask')">关闭</button></span>
     </div>
   </div>
 </div>
@@ -287,13 +315,21 @@ function render() {
   $('updInfo').textContent = u.status === 'checking' ? '正在检查更新…' : u.status === 'latest' ? '已是最新版本'
     : u.status === 'available' ? '有新版本 v' + u.latest : u.status === 'error' ? u.err : '　';
   $('dir').textContent = st.dir; $('dir').title = st.dir;
-  $('optAuto').checked = st.auto; $('optCover').checked = st.cover;
+  $('optAuto').checked = st.auto; $('optCover').checked = st.cover; $('optTx').checked = st.autoTranscribe;
+  var a = st.asr || {};
+  var apct = a.total > 0 ? Math.floor(a.progress / a.total * 100) : 0;
+  $('asrBanner').style.display = (a.status === 'downloading' || a.status === 'error') ? '' : 'none';
+  $('asrText').innerHTML = a.status === 'downloading'
+    ? '第一次转文字，正在下载转文字组件… <b>' + apct + '%</b>（' + mb(a.progress) + ' / ' + mb(a.total) + '，只需下载一次）'
+    : a.status === 'error' ? '转文字组件下载失败：' + esc(a.err) + '。检查网络后，再点一次“转文字”会接着下载。' : '';
+  $('asrInfo').textContent = '视频下载完后，把说的话转成同名 .txt 文案（在本机识别，不上传）。' +
+    (a.status === 'ready' ? '转文字组件已安装。' : a.status === 'downloading' ? '组件下载中 ' + apct + '%。' : '第一次转文字时会自动下载组件（约 ' + Math.round((a.total || 0) / 1e6) + ' MB）。');
 
   var keys = {}; st.items.forEach(function (i) { keys[i.key] = 1; });
   selected.forEach(function (k) { if (!keys[k]) selected.delete(k); });
 
   var visible = st.items.filter(function (i) { return inTab(i, filter); });
-  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), st.currentKey, visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile]; })]);
+  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), st.currentKey, visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile, i.tx, i.txErr]; })]);
   if (sig !== lastSig) {
     lastSig = sig;
     $('tabs').innerHTML = TABS.map(function (t) {
@@ -306,6 +342,7 @@ function render() {
   }
   var sel = Array.from(selected);
   $('bDl').disabled = $('bCover').disabled = $('bRm').disabled = !sel.length;
+  $('bTx').disabled = !sel.some(function (k) { var i = find(k); return i && i.source !== 'article'; });
   $('bDl').textContent = sel.length ? '下载选中 (' + sel.length + ')' : '下载选中';
   $('selAll').checked = visible.length > 0 && visible.every(function (i) { return selected.has(i.key); });
 
@@ -325,16 +362,22 @@ function rowHTML(it) {
   if (it.width && it.height) meta.push('<span>' + it.width + '×' + it.height + '</span>');
   var line2 = '';
   if (it.status === 'error') line2 = '<div class="meta"><span class="err">' + esc(it.err) + '</span></div>';
+  else if (it.tx === 'error') line2 = '<div class="meta"><span class="err">转文字失败：' + esc(it.txErr) + '</span></div>';
   else if (it.status === 'done' && it.file) line2 = '<div class="meta"><span class="file" title="' + esc(it.file) + '">' + esc(it.file) + '</span></div>';
   var ops = [];
   if (canPreview(it)) ops.push('<button class="link" data-act="preview" data-key="' + k + '">预览</button>');
   if (it.status === 'seen' || it.status === 'error') ops.push('<button class="link" data-act="download" data-key="' + k + '">下载</button>');
   if (it.status === 'done') ops.push('<button class="link" data-act="download" data-key="' + k + '">重新下载</button>');
   if (it.cover && it.status !== 'resolving' && it.source !== 'article') ops.push('<button class="link" data-act="cover" data-key="' + k + '">' + (it.coverFile ? '封面✓' : '下载封面') + '</button>');
+  if (it.source !== 'article' && it.status === 'done') {
+    if (it.tx === 'done') ops.push('<button class="link txt" data-act="text" data-key="' + k + '">文案</button>');
+    else if (it.tx !== 'queued' && it.tx !== 'running') ops.push('<button class="link" data-act="transcribe" data-key="' + k + '">' + (it.tx === 'error' ? '重新转文字' : '转文字') + '</button>');
+  }
   if (it.status === 'done') ops.push('<button class="link" data-act="reveal" data-key="' + k + '">打开文件夹</button>');
   var tagText = STATUS[it.status] || it.status;
   if (it.status === 'downloading' && it.total > 0) tagText += ' ' + Math.floor(pct) + '%';
   var isNow = it.key === state.currentKey;
+  var txTag = it.tx === 'running' ? '<span class="tag tx">转文字中…</span>' : it.tx === 'queued' ? '<span class="tag tx">排队转文字</span>' : '';
   return '<div class="row' + (selected.has(it.key) ? ' sel' : '') + (isNow ? ' now' : '') + '">' +
     '<input type="checkbox" data-sel="' + k + '"' + (selected.has(it.key) ? ' checked' : '') + '>' +
     '<div class="thumb' + (canPreview(it) ? '' : ' nop') + '" data-act="preview" data-key="' + k + '">' +
@@ -343,7 +386,7 @@ function rowHTML(it) {
       '<div class="meta">' + meta.join('<span>·</span>') + '</div>' + line2 +
       (it.status === 'downloading' ? '<div class="prog"><i style="width:' + pct + '%"></i></div>' : '') +
     '</div>' +
-    '<div class="ops">' + (isNow ? '<span class="tag now">正在看</span>' : '') + '<span class="tag ' + it.status + '">' + tagText + '</span>' + ops.join('') + '</div></div>';
+    '<div class="ops">' + (isNow ? '<span class="tag now">正在看</span>' : '') + '<span class="tag ' + it.status + '">' + tagText + '</span>' + txTag + ops.join('') + '</div></div>';
 }
 
 $('tabs').addEventListener('click', function (e) {
@@ -364,7 +407,45 @@ $('rows').addEventListener('click', function (e) {
   else if (act === 'download') api('download', { keys: [key] }).catch(fail);
   else if (act === 'cover') api('cover', { keys: [key] }).then(function (r) { toast('封面已保存'); }).catch(fail);
   else if (act === 'reveal') api('open', { file: it.file }).catch(fail);
+  else if (act === 'transcribe') transcribe([key]);
+  else if (act === 'text') showText(it);
 });
+function transcribe(keys) {
+  api('transcribe', { keys: keys }).then(function (r) {
+    var a = (state && state.asr) || {};
+    var msg = [];
+    if (r.queued) msg.push(r.queued + ' 个开始转文字');
+    if (r.downloading) msg.push(r.downloading + ' 个下载完后自动转');
+    toast(msg.join('，') + (a.status !== 'ready' ? '（第一次要先下载转文字组件）' : ''));
+    selected.clear();
+  }).catch(fail);
+}
+var txKey = '';
+function showText(it) {
+  txKey = it.key;
+  api('transcript', { keys: [it.key] }).then(function (r) {
+    var parts = r.text.split('\n\n');
+    var head = parts.length > 1 ? parts.shift() : '';
+    var body = parts.join('\n\n').trim();
+    $('txTitle').textContent = it.title || '文案';
+    $('txSub').textContent = head.split('\n').slice(1).join(' ') || r.file;
+    $('txText').value = body;
+    $('txText').scrollTop = 0;
+    $('txCount').textContent = '共 ' + body.replace(/\s/g, '').length + ' 字';
+    $('txReveal').onclick = function () { api('open', { file: r.file }).catch(fail); };
+    show('txMask');
+  }).catch(fail);
+}
+$('txCopy').onclick = function () { copyText($('txText').value); };
+function copyText(t) {
+  var done = function () { toast('已复制，可以直接粘贴'); };
+  var old = function () {
+    var ta = $('txText'); ta.focus(); ta.select();
+    try { document.execCommand('copy') ? done() : toast('复制失败，请手动全选后复制'); } catch (e) { toast('复制失败，请手动全选后复制'); }
+    ta.setSelectionRange(0, 0);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, old); else old();
+}
 function toggleAll(on) {
   state.items.filter(function (i) { return inTab(i, filter); }).forEach(function (i) { on ? selected.add(i.key) : selected.delete(i.key); });
   render();
@@ -372,6 +453,7 @@ function toggleAll(on) {
 function batch(kind) {
   var keys = Array.from(selected); if (!keys.length) return;
   if (kind === 'download') api('download', { keys: keys }).then(function (r) { toast(r.n ? '已开始下载 ' + r.n + ' 个' : '选中的都已经在下载或下载过了'); selected.clear(); }).catch(fail);
+  if (kind === 'transcribe') transcribe(keys);
   if (kind === 'cover') api('cover', { keys: keys }).then(function () { toast('正在保存 ' + keys.length + ' 张封面'); }).catch(fail);
   if (kind === 'remove') api('remove', { keys: keys }).then(function () { selected.clear(); }).catch(fail);
 }
@@ -413,7 +495,7 @@ function updatePlayerButtons() {
 $('pDl').onclick = function () { api('download', { keys: [playingKey] }).then(function () { toast('已开始下载'); }).catch(fail); };
 $('pReveal').onclick = function () { var it = find(playingKey); if (it) api('open', { file: it.file }).catch(fail); };
 function closePlayer() { var v = $('video'); v.pause(); v.removeAttribute('src'); v.load(); playingKey = ''; hide('playerMask'); }
-document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closePlayer(); hide('setMask'); } });
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closePlayer(); hide('setMask'); hide('txMask'); } });
 
 function setSniff(on) {
   api('sniff', { on: on }).then(function () {

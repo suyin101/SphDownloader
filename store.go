@@ -104,9 +104,14 @@ type Item struct {
 	File      string    `json:"file"`
 	CoverFile string    `json:"coverFile"`
 	Err       string    `json:"err"`
-	Seen      time.Time `json:"seen"`   // 第一次出现在列表的时间（之后不变，排序稳定）
-	Opened    time.Time `json:"opened"` // 你在微信里打开它 / 粘贴链接的时间；打开过的排在最上面
+	Seen      time.Time `json:"seen"`             // 第一次出现在列表的时间（之后不变，排序稳定）
+	Opened    time.Time `json:"opened"`           // 你在微信里打开它 / 粘贴链接的时间；打开过的排在最上面
+	Tx        string    `json:"tx,omitempty"`     // 转文字：queued 排队 / running 转写中 / done 完成 / error 失败（transcribe.go）
+	TxFile    string    `json:"txFile,omitempty"` // 文案 .txt
+	TxErr     string    `json:"txErr,omitempty"`
 	fileKey   string
+	wantTx    bool     // 下载完就转文字（勾选“转文字”时还没下载的）
+	txChecked bool     // 已检查过视频旁边有没有现成的 .txt
 	ks        []byte   // 自带播放器模式：没有钥匙时用的钥匙流（lite.go）
 	images    []string // 公众号文章的原图地址（article.go）
 }
@@ -121,23 +126,25 @@ type linkTask struct {
 }
 
 type Store struct {
-	mu            sync.Mutex
-	items         map[string]*Item
-	tasks         []*linkTask
-	AutoDownload  bool
-	DownloadCover bool
-	Dir           string
-	gotCurrent    bool      // 收到过“正在看的视频”信号；没有的话才用视频请求来兜底
-	pageSeen      time.Time // 页面最近一次来取任务（新脚本才会）
-	inPlace       bool      // 链接下载改为在当前网页里跳转（部分 Windows 微信会把新窗口改走自带播放器，见 CLAUDE.md 灰度坑）
-	lastReport    time.Time // 页面最近一次上报视频（旧脚本也会）
-	queue         chan *Item
-	currentKey    string // 最近打开的那条（界面上标“正在看”）
-	history       map[string]histEntry
-	histPath      string
-	lite          map[string]*liteMedia // 自带播放器模式看到的视频（lite.go）
-	liteKick      chan struct{}
-	liteSeen      time.Time
+	mu             sync.Mutex
+	items          map[string]*Item
+	tasks          []*linkTask
+	AutoDownload   bool
+	DownloadCover  bool
+	AutoTranscribe bool // 下载完自动转文字（默认关）
+	tx             *Transcriber
+	Dir            string
+	gotCurrent     bool      // 收到过“正在看的视频”信号；没有的话才用视频请求来兜底
+	pageSeen       time.Time // 页面最近一次来取任务（新脚本才会）
+	inPlace        bool      // 链接下载改为在当前网页里跳转（部分 Windows 微信会把新窗口改走自带播放器，见 CLAUDE.md 灰度坑）
+	lastReport     time.Time // 页面最近一次上报视频（旧脚本也会）
+	queue          chan *Item
+	currentKey     string // 最近打开的那条（界面上标“正在看”）
+	history        map[string]histEntry
+	histPath       string
+	lite           map[string]*liteMedia // 自带播放器模式看到的视频（lite.go）
+	liteKick       chan struct{}
+	liteSeen       time.Time
 }
 
 func NewStore(dir string) *Store {
@@ -282,6 +289,7 @@ func (s *Store) matchTaskLocked(kind string, feeds []FeedInfo, href string) *lin
 		items[0].Link = ph.Link
 		items[0].LinkKey = ph.LinkKey
 		items[0].Source = "link"
+		items[0].wantTx = items[0].wantTx || ph.wantTx
 	}
 	if len(items) > 0 {
 		if items[0].Status == "done" {
@@ -580,6 +588,7 @@ func (s *Store) Snapshot() ([]Item, bool) {
 	defer s.mu.Unlock()
 	out := make([]Item, 0, len(s.items))
 	for _, it := range s.items {
+		s.syncTxLocked(it)
 		out = append(out, *it)
 	}
 	sortItems(out)
@@ -616,6 +625,9 @@ func (s *Store) worker() {
 			continue
 		}
 		it.Status = "downloading"
+		if it.Tx != "queued" && it.Tx != "running" {
+			it.Tx, it.TxFile, it.TxErr, it.txChecked = "", "", "", false // 重新下载是新文件，文案也要重转
+		}
 		f := it.FeedInfo
 		s.mu.Unlock()
 		var path string
@@ -635,7 +647,11 @@ func (s *Store) worker() {
 			it.File = path
 			s.recordLocked(it)
 			logf("下载完成：%s", filepath.Base(path))
+			if it.Source != "article" && (it.wantTx || s.AutoTranscribe) {
+				s.queueTxLocked(it, it.wantTx)
+			}
 		}
+		it.wantTx = false
 		withCover := s.DownloadCover && it.Source != "article"
 		s.mu.Unlock()
 		if err == nil && withCover {
@@ -943,4 +959,83 @@ func label(it *Item) string {
 		return it.Nickname + "：" + string(t)
 	}
 	return string(t)
+}
+
+// ---- 转文字（transcribe.go）----
+
+// syncTxLocked 视频旁边已经有同名 .txt 的，直接算转过了（重启软件后也认得）。
+func (s *Store) syncTxLocked(it *Item) {
+	if it.txChecked || it.Status != "done" || it.Source == "article" || it.File == "" {
+		return
+	}
+	it.txChecked = true
+	if it.Tx == "" {
+		if p := txtFor(it.File); fileExists(p) {
+			it.Tx, it.TxFile = "done", p
+		}
+	}
+}
+
+// Transcribe 把选中的视频转文字：已下载的直接排队；还没下载的先下载，下完再转。
+func (s *Store) Transcribe(keys []string) (queued, downloading int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range keys {
+		it, ok := s.items[k]
+		if !ok || it.Source == "article" {
+			continue
+		}
+		if strings.HasPrefix(k, "link:") { // 链接还没拿到视频（在等微信打开）：下完再转
+			it.wantTx = true
+			downloading++
+			continue
+		}
+		switch it.Status {
+		case "done":
+			if !fileExists(it.File) {
+				it.Tx, it.TxErr = "error", "视频文件不见了，重新下载后再转"
+				continue
+			}
+			if s.queueTxLocked(it, true) {
+				queued++
+			}
+		case "queued", "downloading", "waiting", "resolving":
+			it.wantTx = true
+			downloading++
+		case "seen", "error":
+			it.wantTx = true
+			if s.enqueueLocked(it, false) {
+				downloading++
+			}
+		}
+	}
+	return
+}
+
+func (s *Store) queueTxLocked(it *Item, force bool) bool {
+	if s.tx == nil || it.Tx == "queued" || it.Tx == "running" || (it.Tx == "done" && !force) {
+		return false
+	}
+	it.Tx, it.TxErr, it.txChecked = "queued", "", true
+	if !s.tx.Enqueue(it) {
+		it.Tx, it.TxErr = "error", "转文字队列已满"
+		return false
+	}
+	return true
+}
+
+// Transcript 读出一条视频的文案。
+func (s *Store) Transcript(key string) (string, string, error) {
+	s.mu.Lock()
+	it, ok := s.items[key]
+	var p string
+	if ok {
+		p = it.TxFile
+	}
+	s.mu.Unlock()
+	if !ok || p == "" {
+		return "", "", fmt.Errorf("这条视频还没有转文字")
+	}
+	txt, err := readTranscript(p)
+	return txt, p, err
 }
