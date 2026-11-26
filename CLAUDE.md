@@ -38,7 +38,11 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   组件在 dataDir/asr，第一次用时下载（约 248MB，断点续传 + sha256 校验）：程序包 asr-runtime-<平台>.zip 只在 GitHub 发布 asr-v1（--latest=false！）；
   模型 model.int8.onnx/tokens.txt 先 hf-mirror.com，再 huggingface.co，再 asr-v1。asr-build/（gitignore）里有原始下载和 pack/ 打包结果，release.sh 首次发版时自动建 asr-v1。
   速度（M 系列 Mac）：74 秒视频 2.6 秒，12 分钟视频 4 秒。测试：`ASR_DIR=装好组件的目录 SAMPLE_MP4=x.mp4 go test -run TestTranscribeLive -v`；
-  `AUDIO_DIR=一批mp4 go test -run TestDecodeMP4Audio -v` 检查解声音。
+  `AUDIO_DIR=一批mp4 go test -run 'TestDecodeMP4Audio|TestDecodeVsFFmpeg' -v` 检查解声音（和 ffmpeg 比相关度，要 ≥0.9）。
+  【坑 v1.7.0】go-aac v0.1.0 的 PNS 有 bug，解出来只剩约三成声音，长视频后半段识别成乱码；v1.7.1 升到 800d9fa 修好（相关 0.99）。HE-AACv2 音乐和 ffmpeg 对不上属正常（PS 合成立体声），人声样本 0.99。
+  v1.7.1：转文字进度（识别程序边识别边输出，按“识别到第几秒/总时长”算，TxPct）；“转文字”按钮只在勾选后显示；文案窗口可“重新转文字”。
+- 【缩略图 v1.7.1】封面经 /api/coverimg 由软件代取（Windows 网页控件直接加载微信图片可能失败）；自带播放器模式没有封面，界面用 /api/preview 截视频第 1 秒一帧（pumpFrames，一次一个）。
+  界面截图用 Electron（headless Chrome 不支持 H.264）：AutoCut 的 node_modules/.bin/electron 离屏打开 DEMO 页面 capturePage。
 - history.go：下载记录 history.json，下过的视频/链接不再自动重下（手动“重新下载”除外）。sniffer.go：嗅探开关，关=还原代理+关端口+断开连接。
 - store.go：下载队列（3 并发）。【清晰度】只留 encfilekey/token 的“原画质”地址实测只有 1024×576/350kbps；v1.4.4 起 inject.js 上报 media.spec 档位，
   candidateURLs 先用完整地址 + &X-snsvideoflag=最高档（levelOrder 最小的正数，同档比码率，参照 ltaoo PickHighestSpec），失败再退回旧地址。封面，/api/preview 边下边解密（支持 Range）。

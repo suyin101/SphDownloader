@@ -109,6 +109,7 @@ type Item struct {
 	Tx        string    `json:"tx,omitempty"`     // 转文字：queued 排队 / running 转写中 / done 完成 / error 失败（transcribe.go）
 	TxFile    string    `json:"txFile,omitempty"` // 文案 .txt
 	TxErr     string    `json:"txErr,omitempty"`
+	TxPct     int       `json:"txPct,omitempty"` // 转文字进度 0~100
 	fileKey   string
 	wantTx    bool     // 下载完就转文字（勾选“转文字”时还没下载的）
 	txChecked bool     // 已检查过视频旁边有没有现成的 .txt
@@ -1038,4 +1039,55 @@ func (s *Store) Transcript(key string) (string, string, error) {
 	}
 	txt, err := readTranscript(p)
 	return txt, p, err
+}
+
+// ---- 封面图（经软件转一道，Windows 网页控件直接加载微信图片有时显示不出来）----
+
+var (
+	coverMu    sync.Mutex
+	coverCache = map[string]coverImg{}
+)
+
+type coverImg struct {
+	ct   string
+	data []byte
+}
+
+func (s *Store) CoverImage(key string) (coverImg, error) {
+	s.mu.Lock()
+	it, ok := s.items[key]
+	var u string
+	if ok {
+		u = it.Cover
+	}
+	s.mu.Unlock()
+	if u == "" {
+		return coverImg{}, fmt.Errorf("没有封面")
+	}
+	coverMu.Lock()
+	c, hit := coverCache[u]
+	coverMu.Unlock()
+	if hit {
+		return c, nil
+	}
+	resp, err := getWithFallback(u)
+	if err != nil {
+		return coverImg{}, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return coverImg{}, err
+	}
+	c = coverImg{ct: resp.Header.Get("Content-Type"), data: b}
+	if c.ct == "" || !strings.HasPrefix(c.ct, "image/") {
+		c.ct = http.DetectContentType(b)
+	}
+	coverMu.Lock()
+	if len(coverCache) > 500 {
+		coverCache = map[string]coverImg{}
+	}
+	coverCache[u] = c
+	coverMu.Unlock()
+	return c, nil
 }

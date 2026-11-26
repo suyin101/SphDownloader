@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	version = "1.7.0"
+	version = "1.7.1"
 	uiPort  = 18889
 )
 
@@ -298,6 +298,16 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 			"version": version, "items": items, "logs": logs, "dir": dir,
 			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent, "autoTranscribe": autoTx, "asr": asr,
 		})
+	})
+	mux.HandleFunc("/api/coverimg", func(w http.ResponseWriter, r *http.Request) {
+		c, err := store.CoverImage(r.URL.Query().Get("key"))
+		if err != nil {
+			http.Error(w, err.Error(), 404)
+			return
+		}
+		w.Header().Set("Content-Type", c.ct)
+		w.Header().Set("Cache-Control", "max-age=86400")
+		w.Write(c.data)
 	})
 	mux.HandleFunc("/api/preview", func(w http.ResponseWriter, r *http.Request) {
 		store.ServePreview(w, r, r.URL.Query().Get("key"))

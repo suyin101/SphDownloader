@@ -114,6 +114,7 @@
   .player .pbar .pt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .player .pbar button { background:#2a2a2e; border-color:#3a3a3f; color:#eee; }
   .tag.tx { background:var(--blue-weak); color:var(--blue); }
+  .prog.tx i { background:var(--blue); }
   button.link.txt { color:var(--brand); font-weight:500; }
   button.link.txt:hover:not(:disabled) { background:var(--brand-weak); }
   .txdlg { width:min(720px,100%); display:flex; flex-direction:column; max-height:86vh; }
@@ -178,7 +179,7 @@
         <span class="grow"></span>
         <label class="chk"><input type="checkbox" id="selAll" onchange="toggleAll(this.checked)">全选</label>
         <button id="bDl" onclick="batch('download')" disabled>下载选中</button>
-        <button id="bTx" onclick="batch('transcribe')" disabled title="把视频里说的话转成文字，存成同名 .txt（在本机识别，不上传）">转文字</button>
+        <button id="bTx" class="primary" style="display:none" onclick="batch('transcribe')" title="把视频里说的话转成文字，存成同名 .txt（在本机识别，不上传）">转文字</button>
         <button id="bCover" onclick="batch('cover')" disabled>下载封面</button>
         <button id="bRm" class="danger" onclick="batch('remove')" disabled>移除</button>
         <button id="bClear" class="danger" onclick="clearList()">清空列表</button>
@@ -246,7 +247,7 @@
     <textarea id="txText" readonly></textarea>
     <div class="dfoot">
       <span id="txCount"></span>
-      <span><button id="txReveal">打开所在文件夹</button> <button class="primary" id="txCopy">复制全部</button> <button onclick="hide('txMask')">关闭</button></span>
+      <span><button id="txRedo">重新转文字</button> <button id="txReveal">打开所在文件夹</button> <button class="primary" id="txCopy">复制全部</button> <button onclick="hide('txMask')">关闭</button></span>
     </div>
   </div>
 </div>
@@ -259,6 +260,40 @@ var STATUS = { resolving:'解析中', waiting:'等微信打开', seen:'未下载
 var TABS = [['all','全部'],['seen','未下载'],['active','进行中'],['done','已完成'],['error','失败']];
 
 function $(id) { return document.getElementById(id); }
+// 缩略图：有封面就经软件转一道加载；没有封面（微信自带播放器模式）就截视频里的一帧
+var frames = {}, frameBusy = false;
+function thumbHTML(it) {
+  if (it.cover) return '<img loading="lazy" src="/api/coverimg?key=' + encodeURIComponent(it.key) + '" onerror="this.onerror=null;this.referrerPolicy=\'no-referrer\';this.src=this.dataset.src" data-src="' + esc(it.cover) + '">';
+  if (frames[it.key]) return '<img src="' + frames[it.key] + '">';
+  return '';
+}
+function pumpFrames() {
+  if (frameBusy || !state) return;
+  var it = state.items.find(function (i) { return !i.cover && canPreview(i) && !(i.key in frames) && inTab(i, filter); });
+  if (!it) return;
+  frameBusy = true; frames[it.key] = '';
+  var v = document.createElement('video'), key = it.key, done = false;
+  var finish = function (url) {
+    if (done) return; done = true; clearTimeout(timer);
+    if (url) frames[key] = url;
+    v.removeAttribute('src'); v.load(); frameBusy = false;
+    if (url) render();
+    setTimeout(pumpFrames, 50);
+  };
+  var timer = setTimeout(function () { finish(''); }, 20000);
+  v.muted = true; v.preload = 'auto'; v.playsInline = true;
+  v.onloadedmetadata = function () { v.currentTime = Math.min(1, (v.duration || 2) / 3); };
+  v.onseeked = function () {
+    try {
+      var c = document.createElement('canvas'), w = 120, h = 160; c.width = w; c.height = h;
+      var vw = v.videoWidth, vh = v.videoHeight, s = Math.max(w / vw, h / vh);
+      c.getContext('2d').drawImage(v, (w - vw * s) / 2, (h - vh * s) / 2, vw * s, vh * s);
+      finish(c.toDataURL('image/jpeg', 0.8));
+    } catch (e) { finish(''); }
+  };
+  v.onerror = function () { finish(''); };
+  v.src = '/api/preview?key=' + encodeURIComponent(key);
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); }
 function mb(n) { return n > 0 ? (n / 1048576).toFixed(1) + ' MB' : ''; }
 function dur(s) { if (!s) return ''; s = Math.round(s); var m = Math.floor(s / 60), x = s % 60; return m + ':' + (x < 10 ? '0' : '') + x; }
@@ -329,7 +364,7 @@ function render() {
   selected.forEach(function (k) { if (!keys[k]) selected.delete(k); });
 
   var visible = st.items.filter(function (i) { return inTab(i, filter); });
-  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), st.currentKey, visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile, i.tx, i.txErr]; })]);
+  var sig = JSON.stringify([filter, $('q').value, Array.from(selected), st.currentKey, visible.map(function (i) { return [i.key, i.status, i.progress, i.total, i.title, i.cover, i.err, i.file, i.coverFile, i.tx, i.txErr, i.txPct, frames[i.key]]; }), (st.asr || {}).status]);
   if (sig !== lastSig) {
     lastSig = sig;
     $('tabs').innerHTML = TABS.map(function (t) {
@@ -342,7 +377,9 @@ function render() {
   }
   var sel = Array.from(selected);
   $('bDl').disabled = $('bCover').disabled = $('bRm').disabled = !sel.length;
-  $('bTx').disabled = !sel.some(function (k) { var i = find(k); return i && i.source !== 'article'; });
+  var txN = sel.filter(function (k) { var i = find(k); return i && i.source !== 'article'; }).length;
+  $('bTx').style.display = txN ? '' : 'none';
+  $('bTx').textContent = '转文字 (' + txN + ')';
   $('bDl').textContent = sel.length ? '下载选中 (' + sel.length + ')' : '下载选中';
   $('selAll').checked = visible.length > 0 && visible.every(function (i) { return selected.has(i.key); });
 
@@ -371,20 +408,22 @@ function rowHTML(it) {
   if (it.cover && it.status !== 'resolving' && it.source !== 'article') ops.push('<button class="link" data-act="cover" data-key="' + k + '">' + (it.coverFile ? '封面✓' : '下载封面') + '</button>');
   if (it.source !== 'article' && it.status === 'done') {
     if (it.tx === 'done') ops.push('<button class="link txt" data-act="text" data-key="' + k + '">文案</button>');
-    else if (it.tx !== 'queued' && it.tx !== 'running') ops.push('<button class="link" data-act="transcribe" data-key="' + k + '">' + (it.tx === 'error' ? '重新转文字' : '转文字') + '</button>');
+    else if (it.tx !== 'queued' && it.tx !== 'running' && selected.has(it.key)) ops.push('<button class="link" data-act="transcribe" data-key="' + k + '">' + (it.tx === 'error' ? '重新转文字' : '转文字') + '</button>');
   }
   if (it.status === 'done') ops.push('<button class="link" data-act="reveal" data-key="' + k + '">打开文件夹</button>');
   var tagText = STATUS[it.status] || it.status;
   if (it.status === 'downloading' && it.total > 0) tagText += ' ' + Math.floor(pct) + '%';
   var isNow = it.key === state.currentKey;
-  var txTag = it.tx === 'running' ? '<span class="tag tx">转文字中…</span>' : it.tx === 'queued' ? '<span class="tag tx">排队转文字</span>' : '';
+  var asrDl = state.asr && state.asr.status === 'downloading';
+  var txTag = it.tx === 'running' ? '<span class="tag tx">' + (asrDl && !it.txPct ? '等组件下载' : '转文字 ' + (it.txPct || 0) + '%') + '</span>' : it.tx === 'queued' ? '<span class="tag tx">排队转文字</span>' : '';
   return '<div class="row' + (selected.has(it.key) ? ' sel' : '') + (isNow ? ' now' : '') + '">' +
     '<input type="checkbox" data-sel="' + k + '"' + (selected.has(it.key) ? ' checked' : '') + '>' +
     '<div class="thumb' + (canPreview(it) ? '' : ' nop') + '" data-act="preview" data-key="' + k + '">' +
-      (it.cover ? '<img loading="lazy" referrerpolicy="no-referrer" src="' + esc(it.cover) + '">' : '') + '<div class="play"></div></div>' +
+      thumbHTML(it) + '<div class="play"></div></div>' +
     '<div class="info"><div class="title" title="' + esc(it.title) + '">' + esc(it.title || '(无标题)') + '</div>' +
       '<div class="meta">' + meta.join('<span>·</span>') + '</div>' + line2 +
       (it.status === 'downloading' ? '<div class="prog"><i style="width:' + pct + '%"></i></div>' : '') +
+      (it.tx === 'running' ? '<div class="prog tx"><i style="width:' + (it.txPct || 0) + '%"></i></div>' : '') +
     '</div>' +
     '<div class="ops">' + (isNow ? '<span class="tag now">正在看</span>' : '') + '<span class="tag ' + it.status + '">' + tagText + '</span>' + txTag + ops.join('') + '</div></div>';
 }
@@ -433,6 +472,7 @@ function showText(it) {
     $('txText').scrollTop = 0;
     $('txCount').textContent = '共 ' + body.replace(/\s/g, '').length + ' 字';
     $('txReveal').onclick = function () { api('open', { file: r.file }).catch(fail); };
+    $('txRedo').onclick = function () { hide('txMask'); transcribe([it.key]); };
     show('txMask');
   }).catch(fail);
 }
@@ -531,7 +571,7 @@ function quitApp() {
 
 function refresh() {
   return fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
-    state = s; render(); if (playingKey) updatePlayerButtons();
+    state = s; render(); pumpFrames(); if (playingKey) updatePlayerButtons();
   }).catch(function () { $('pillText').textContent = '下载器已关闭'; $('pill').className = 'pill'; });
 }
 refresh();

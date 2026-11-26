@@ -7,6 +7,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -356,11 +357,17 @@ func (t *Transcriber) worker() {
 			s.mu.Unlock()
 			continue
 		}
-		it.Tx = "running"
+		it.Tx, it.TxPct = "running", 0
 		file, info := it.File, it.FeedInfo
 		s.mu.Unlock()
 
-		txt, err := t.run(file, info)
+		txt, err := t.run(file, info, func(pct int) {
+			s.mu.Lock()
+			if pct > it.TxPct {
+				it.TxPct = pct
+			}
+			s.mu.Unlock()
+		})
 		s.mu.Lock()
 		if err != nil {
 			it.Tx, it.TxErr = "error", err.Error()
@@ -374,7 +381,11 @@ func (t *Transcriber) worker() {
 }
 
 // run 转一个视频，返回 .txt 路径。
-func (t *Transcriber) run(file string, info FeedInfo) (string, error) {
+// onPct 报进度 0~100：解出声音算 8%，后面按识别到第几秒算。
+func (t *Transcriber) run(file string, info FeedInfo, onPct func(int)) (string, error) {
+	if onPct == nil {
+		onPct = func(int) {}
+	}
 	if err := t.ensure(); err != nil {
 		return "", err
 	}
@@ -382,6 +393,7 @@ func (t *Transcriber) run(file string, info FeedInfo) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	onPct(5)
 	if len(pcm) < rate/2 {
 		return "", errors.New("没识别到人声（视频没有声音）")
 	}
@@ -393,7 +405,12 @@ func (t *Transcriber) run(file string, info FeedInfo) (string, error) {
 		return "", err
 	}
 	secs := float64(len(pcm)) / float64(rate)
-	segs, err := t.recognize(secs)
+	onPct(8)
+	segs, err := t.recognize(secs, func(at float64) {
+		if secs > 0 {
+			onPct(8 + int(at/secs*91))
+		}
+	})
 	if err != nil {
 		return "", err
 	}
@@ -416,7 +433,8 @@ type asrSeg struct {
 var segLine = regexp.MustCompile(`^\s*([0-9.]+)\s+--\s+([0-9.]+):\s?(.*)$`)
 
 // recognize 调命令行识别 work/job.wav。用相对路径，避免 Windows 用户名里有中文时程序读不到文件。
-func (t *Transcriber) recognize(secs float64) ([]asrSeg, error) {
+// onAt 每识别出一句就报一次“识别到第几秒”（程序是边识别边输出的）。
+func (t *Transcriber) recognize(secs float64, onAt func(float64)) ([]asrSeg, error) {
 	threads := runtime.NumCPU() / 2
 	if threads < 1 {
 		threads = 1
@@ -439,7 +457,26 @@ func (t *Transcriber) recognize(secs float64) ([]asrSeg, error) {
 	hideWindow(cmd)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("识别程序启动失败：%v", err)
+	}
+	var out strings.Builder
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		out.WriteString(line + "\n")
+		if m := segLine.FindStringSubmatch(strings.TrimRight(line, "\r")); m != nil && onAt != nil {
+			if at, e := strconv.ParseFloat(m[2], 64); e == nil {
+				onAt(at)
+			}
+		}
+	}
+	err = cmd.Wait()
 	if ctx.Err() != nil {
 		return nil, errors.New("转文字超时了")
 	}
@@ -451,7 +488,7 @@ func (t *Transcriber) recognize(secs float64) ([]asrSeg, error) {
 		tracef("[转文字] 出错 %v\n%s", err, stderr.String())
 		return nil, fmt.Errorf("识别程序出错：%v %s", err, msg)
 	}
-	return parseSegments(string(out)), nil
+	return parseSegments(out.String()), nil
 }
 
 func parseSegments(out string) []asrSeg {

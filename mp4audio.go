@@ -416,12 +416,11 @@ func appendMono(dst []int16, in []float32, ch int) []int16 {
 		for c := 0; c < ch; c++ {
 			s += in[i+c]
 		}
-		s /= float32(ch)
-		// 解码器输出可能是 ±1 也可能是 ±32768，统一按 int16 范围处理
-		if s > -1.5 && s < 1.5 {
-			s *= 32767
+		v := float64(s) / float64(ch) * 32767 // 解码器输出 ±1
+		if math.IsNaN(v) {
+			v = 0
 		}
-		dst = append(dst, int16(math.Max(-32768, math.Min(32767, float64(s)))))
+		dst = append(dst, int16(math.Max(-32768, math.Min(32767, v))))
 	}
 	return dst
 }

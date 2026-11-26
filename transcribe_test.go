@@ -104,12 +104,17 @@ func TestTranscribeLive(t *testing.T) {
 		t.Fatal("组件没装好")
 	}
 	start := time.Now()
-	txt, err := tr.run(video, FeedInfo{Title: "测试标题", Nickname: "作者", CreateTime: 1763400000})
+	var pcts []int
+	txt, err := tr.run(video, FeedInfo{Title: "测试标题", Nickname: "作者", CreateTime: 1763400000}, func(p int) { pcts = append(pcts, p) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	out, _ := readTranscript(txt)
 	t.Logf("用时 %v\n%s", time.Since(start).Round(time.Millisecond), out)
+	t.Logf("进度：%v", pcts)
+	if len(pcts) < 3 || pcts[len(pcts)-1] < 90 {
+		t.Fatalf("进度没有一路报到接近 100：%v", pcts)
+	}
 	if !strings.HasPrefix(out, "测试标题\n作者：作者") || len([]rune(out)) < 30 {
 		t.Fatal("文案内容不对")
 	}
