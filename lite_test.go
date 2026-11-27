@@ -176,9 +176,16 @@ func TestLiteHeaderFallback(t *testing.T) {
 	s := liteTestStore(t, memWith(other[:encryptedLen], plain[:encryptedLen]))
 	u := srv.URL + "/251/20302/stodownload?encfilekey=" + testEK + "&token=t"
 	playLite(s, u, 3) // 请求 3 次 = 正在看
-	it := waitItem(t, s, func(it Item) bool { return it.Source == "lite" })
-	if !strings.HasPrefix(it.Key, "lite:h") || s.CurrentKey() != it.Key {
+	// 一开始播放就该有“正在找钥匙”的占位，不用等扫描
+	if ph, ok := s.Get("lite-wait:" + shortEK(testEK)); !ok || ph.Status != "resolving" || s.CurrentKey() != ph.Key {
+		t.Fatalf("播放时没先放占位条目：%+v", ph)
+	}
+	it := waitItem(t, s, func(it Item) bool { return strings.HasPrefix(it.Key, "lite:h") })
+	if s.CurrentKey() != it.Key {
 		t.Fatalf("条目不对：%+v", it)
+	}
+	if _, ok := s.Get("lite-wait:" + shortEK(testEK)); ok {
+		t.Fatal("找到钥匙后占位条目没去掉")
 	}
 	s.Enqueue([]string{it.Key})
 	it = waitItem(t, s, func(it Item) bool { return it.Status == "done" })

@@ -50,6 +50,41 @@ type liteMedia struct {
 	state       string // pending / done / failed
 	played      bool
 	itemKey     string
+	waitKey     string // 正在找钥匙时列表里先放的占位条目
+}
+
+// liteWaitLocked 开始播放就先在列表里放一条“正在找钥匙”，不用干等内存扫描（几秒）才出现。
+func (s *Store) liteWaitLocked(lm *liteMedia) {
+	if lm.waitKey != "" || lm.state != "pending" || !lm.played {
+		return
+	}
+	lm.waitKey = "lite-wait:" + shortEK(lm.ek)
+	now := time.Now()
+	it := &Item{Key: lm.waitKey, FeedInfo: FeedInfo{ID: lm.waitKey, Title: "视频号视频（正在从微信里找解密钥匙，播放几秒就好）", Size: lm.total},
+		Source: "lite", Status: "resolving", Seen: now, Opened: now}
+	s.items[lm.waitKey] = it
+	s.currentKey = lm.waitKey
+}
+
+// liteWaitDoneLocked 找到钥匙后把占位条目换成真的（保持原来的位置）；找不到就把占位改成失败说明。
+func (s *Store) liteWaitDoneLocked(lm *liteMedia, real *Item, failMsg string) {
+	ph := s.items[lm.waitKey]
+	if lm.waitKey == "" || ph == nil {
+		return
+	}
+	if real != nil {
+		delete(s.items, lm.waitKey)
+		real.Seen = ph.Seen
+		if real.Opened.Before(ph.Opened) {
+			real.Opened = ph.Opened
+		}
+		if s.currentKey == lm.waitKey {
+			s.currentKey = real.Key
+		}
+		return
+	}
+	ph.Status, ph.Err = "error", failMsg
+	ph.Title = "视频号视频（没找到解密钥匙）"
 }
 
 // OnLiteMedia 代理看到 *.video.qq.com 的视频响应时调用。
@@ -113,6 +148,7 @@ func (s *Store) OnLiteMedia(raw string, ct string, h http.Header, status int) (e
 	}
 	wasPlayed := lm.played
 	lm.played = lm.played || lm.m != "" || lm.count >= 3
+	s.liteWaitLocked(lm)
 	if lm.state == "done" {
 		if it := s.items[lm.itemKey]; it != nil {
 			if it.Status == "seen" || it.Status == "error" || it.Status == "done" {
@@ -232,6 +268,7 @@ func (s *Store) liteLoop() {
 					tracef("读视频开头失败（%s）：%v", shortEK(j.ek), err)
 					if j.lm.headErr >= 3 {
 						j.lm.state = "failed"
+						s.liteWaitDoneLocked(j.lm, nil, "视频地址打不开，在微信里重新播放一下")
 						if j.played {
 							logf("视频地址打不开：%v", err)
 						}
@@ -304,6 +341,7 @@ func (s *Store) liteLoop() {
 				tryHdr = append(tryHdr, j)
 			} else if j.scans >= 8 {
 				j.lm.state = "failed"
+				s.liteWaitDoneLocked(j.lm, nil, "没找到解密钥匙，在微信里把它多播放几秒再试")
 				if j.played {
 					logf("这个视频没找到解密钥匙（%s）。可以在微信里把它多播放几秒再试", shortEK(j.ek))
 				}
@@ -405,6 +443,7 @@ func (s *Store) liteResolved(lm *liteMedia, seed uint64, ks []byte, info seedInf
 			it.ks = ks
 		}
 	}
+	s.liteWaitDoneLocked(lm, it, "")
 	if lm.played {
 		s.markLiteCurrentLocked(it)
 	}

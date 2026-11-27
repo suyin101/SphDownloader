@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -10,6 +11,8 @@ import (
 
 // runWindow 打开软件窗口（用系统自带的 WebView2），窗口关掉才返回。
 func runWindow(url string) {
+	// 窗口在后台（你在微信里看视频）时别被系统降速，列表才能实时更新
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows")
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		AutoFocus: true,
 		DataPath:  filepath.Join(dataDir, "webview2"),

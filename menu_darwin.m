@@ -38,6 +38,11 @@ void sphdlSetupMenu(void) {
 
 	[NSApp setMainMenu:bar];
 
+	// 不让 macOS 在窗口被挡住时给软件“打盹”（App Nap 会拖慢列表刷新和代理转发）
+	static id activity;
+	activity = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
+	                                                          reason:@"实时接收视频号视频"];
+
 	// ⌘Q / 程序坞“退出”时先还原网络设置
 	[[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationWillTerminateNotification
 	                                                  object:nil queue:nil

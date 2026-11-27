@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"net/http"
 	"os"
@@ -17,7 +18,7 @@ import (
 )
 
 const (
-	version = "1.9.0"
+	version = "1.9.1"
 	uiPort  = 18889
 )
 
@@ -312,6 +313,39 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		w.Header().Set("Cache-Control", "max-age=86400")
 		w.Write(c.data)
 	})
+	// 有变化就马上通知界面刷新（以前界面每秒问一次；窗口在后台时系统会把“每秒”拖成好几秒）
+	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "no stream", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprint(w, "retry: 1000\n\n")
+		fl.Flush()
+		last, idle := "", 0
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-tick.C:
+			}
+			sig := stateSig(store)
+			if sig != last {
+				last, idle = sig, 0
+				fmt.Fprint(w, "data: 1\n\n")
+			} else if idle++; idle >= 75 { // 15 秒一次心跳，连接不被断
+				idle = 0
+				fmt.Fprint(w, ": ping\n\n")
+			} else {
+				continue
+			}
+			fl.Flush()
+		}
+	})
 	mux.HandleFunc("/api/preview", func(w http.ResponseWriter, r *http.Request) {
 		store.ServePreview(w, r, r.URL.Query().Get("key"))
 	})
@@ -487,4 +521,30 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		return nil, nil
 	}))
 	return mux
+}
+
+// stateSig 界面关心的东西的指纹：变了才通知界面。
+func stateSig(store *Store) string {
+	items, _ := store.Snapshot()
+	h := fnv.New64a()
+	for _, it := range items {
+		fmt.Fprintf(h, "%s|%s|%d|%d|%s|%s|%s|%s|%s|%d|%s|%d;", it.Key, it.Status, it.Progress, it.Total, it.Title, it.Cover, it.Err, it.File, it.Tx, it.TxPct, it.CoverFile, it.Images)
+	}
+	logMu.Lock()
+	fmt.Fprintf(h, "logs%d", len(logLines))
+	if n := len(logLines); n > 0 {
+		h.Write([]byte(logLines[n-1]))
+	}
+	logMu.Unlock()
+	fmt.Fprintf(h, "|%s|%s", store.PageState(), store.CurrentKey())
+	if store.tx != nil {
+		st := store.tx.State()
+		fmt.Fprintf(h, "|%s|%d|%s", st.Status, st.Progress/(1<<20), st.Mode)
+	}
+	if updater != nil {
+		u := updater.State()
+		fmt.Fprintf(h, "|%s|%d", u.Status, u.Progress/(1<<20))
+	}
+	fmt.Fprintf(h, "|%v", sniffer != nil && sniffer.On())
+	return strconv.FormatUint(h.Sum64(), 36)
 }

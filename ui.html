@@ -592,13 +592,25 @@ function quitApp() {
   document.body.innerHTML = '<div class="empty" style="padding-top:30vh"><b>已退出</b>网络设置已恢复，可以关掉这个窗口了。</div>';
 }
 
+var busy = false, again = false;
 function refresh() {
+  if (busy) { again = true; return Promise.resolve(); } // 正在刷就记一笔，刷完再来一次，别堆积
+  busy = true;
   return fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
     state = s; render(); pumpFrames(); if (playingKey) updatePlayerButtons();
-  }).catch(function () { $('pillText').textContent = '下载器已关闭'; $('pill').className = 'pill'; });
+  }).catch(function () { $('pillText').textContent = '下载器已关闭'; $('pill').className = 'pill'; }).finally(refreshDone);
 }
+function refreshDone() { busy = false; if (again) { again = false; refresh(); } }
 refresh();
-setInterval(refresh, 1000);
+setInterval(refresh, 2000); // 兜底
+// 有变化后台马上推过来，不用等
+(function listen() {
+  if (!window.EventSource) return;
+  var es = new EventSource('/api/events');
+  es.onmessage = function () { refresh(); };
+})();
+document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+window.addEventListener('focus', refresh);
 </script>
 </body>
 </html>
