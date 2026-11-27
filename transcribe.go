@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -75,6 +76,63 @@ func hfPart(repo, path, name string, size int64, sha string) asrPart {
 
 var asrParts = defaultASRParts
 
+// asrBundleDir 完整安装包自带的转文字组件（快速模式）：Mac 在 .app/Contents/Resources/asr-bundle，
+// Windows 在 exe 旁边的 asr-bundle。自动更新只换程序、不带它，但第一次启动就已经拷进 dataDir/asr 了。
+var asrBundleDir = func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	d := filepath.Dir(exe)
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(d, "..", "Resources", "asr-bundle")
+	}
+	return filepath.Join(d, "asr-bundle")
+}
+
+// bundled 安装包里有没有这个文件（大小对得上才算）。
+func bundled(p asrPart) string {
+	dir := asrBundleDir()
+	if dir == "" {
+		return ""
+	}
+	f := filepath.Join(dir, filepath.Base(filepath.FromSlash(p.Name)))
+	if st, err := os.Stat(f); err == nil && st.Size() == p.Size {
+		return f
+	}
+	return ""
+}
+
+// bundledAll 这个模式的组件安装包里全都有。
+func bundledAll(mode string) bool {
+	for _, p := range asrParts(mode) {
+		if bundled(p) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
 func defaultASRParts(mode string) []asrPart {
 	rt := asrRuntimeName()
 	info := asrRuntimeInfo[rt]
@@ -123,6 +181,7 @@ type Transcriber struct {
 	dlMu  sync.Mutex // 同一时间只下载一次组件
 	mode  string
 	ready map[string]bool
+	bgAcc atomic.Bool // 精准模式组件正在后台下载
 }
 
 func NewTranscriber(dir string, store *Store) *Transcriber {
@@ -132,6 +191,13 @@ func NewTranscriber(dir string, store *Store) *Transcriber {
 		t.ready[m] = t.installed(m)
 	}
 	t.st.Status = "missing"
+	if !t.ready[asrFast] && bundledAll(asrFast) {
+		go func() {
+			if err := t.ensure(asrFast); err != nil {
+				logf("安装包自带的转文字组件没装上：%v", err)
+			}
+		}()
+	}
 	go t.worker() // 一次只转一个，不和下载抢电脑
 	return t
 }
@@ -211,6 +277,12 @@ func (t *Transcriber) installed(mode string) bool {
 
 // ensure 没装就下载（带进度，断了能接着下）。
 func (t *Transcriber) ensure(mode string) error {
+	if t.installed(mode) {
+		t.mu.Lock()
+		t.ready[mode] = true
+		t.mu.Unlock()
+		return nil
+	}
 	t.dlMu.Lock()
 	defer t.dlMu.Unlock()
 	if t.installed(mode) {
@@ -227,7 +299,12 @@ func (t *Transcriber) ensure(mode string) error {
 		return err
 	}
 	name := map[string]string{asrAccurate: "精准模式", asrFast: "快速模式"}[mode]
-	logf("第一次用%s转文字，正在下载组件（约 %d MB，只需下载一次）", name, t.totalSize(mode)/1e6)
+	fromBundle := bundledAll(mode)
+	if fromBundle {
+		logf("正在安装%s转文字组件（安装包自带，不用下载）", name)
+	} else {
+		logf("第一次用%s转文字，正在下载组件（约 %d MB，只需下载一次）", name, t.totalSize(mode)/1e6)
+	}
 	var done int64
 	t.set(func(s *ASRState) { s.Status, s.Err, s.Progress, s.Total = "downloading", "", 0, t.totalSize(mode) })
 	for _, p := range asrParts(mode) {
@@ -264,9 +341,22 @@ func (t *Transcriber) fetchPart(p asrPart, base int64) error {
 	}
 	tmp := final + ".part"
 	var lastErr error
-	for _, u := range p.URLs {
+	srcs := p.URLs
+	if b := bundled(p); b != "" {
+		srcs = append([]string{"bundle:" + b}, srcs...)
+	}
+	for _, u := range srcs {
 		for try := 0; try < 3; try++ {
-			err := t.download(u, tmp, p.Size, base)
+			var err error
+			if strings.HasPrefix(u, "bundle:") {
+				if err = copyFile(strings.TrimPrefix(u, "bundle:"), tmp); err == nil {
+					t.set(func(s *ASRState) { s.Progress = base + p.Size })
+				} else {
+					err = fmt.Errorf("%w：安装包里的组件读不了（%v）", errBadSource, err)
+				}
+			} else {
+				err = t.download(u, tmp, p.Size, base)
+			}
 			if err == nil {
 				break
 			}
@@ -449,13 +539,31 @@ func (t *Transcriber) worker() {
 	}
 }
 
+// pickMode 这次用哪种模式：选的是精准但组件还没下好、快速能用（安装包自带）时，这次先用快速，精准在后台下载。
+func (t *Transcriber) pickMode() string {
+	mode := t.Mode()
+	if mode != asrAccurate || t.installed(asrAccurate) || !t.installed(asrFast) {
+		return mode
+	}
+	if t.bgAcc.CompareAndSwap(false, true) {
+		logf("精准模式组件在后台下载（约 %d MB），下好之前先用快速模式转", t.totalSize(asrAccurate)/1e6)
+		go func() {
+			defer t.bgAcc.Store(false)
+			if err := t.ensure(asrAccurate); err != nil {
+				logf("精准模式组件下载失败：%v（先继续用快速模式）", err)
+			}
+		}()
+	}
+	return asrFast
+}
+
 // run 转一个视频，返回 .txt 路径。
 // onPct 报进度 0~100：解出声音算 8%，后面按识别到第几秒算。
 func (t *Transcriber) run(file string, info FeedInfo, onPct func(int)) (string, error) {
 	if onPct == nil {
 		onPct = func(int) {}
 	}
-	mode := t.Mode()
+	mode := t.pickMode()
 	if err := t.ensure(mode); err != nil {
 		return "", err
 	}

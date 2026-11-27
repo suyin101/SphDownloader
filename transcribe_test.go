@@ -150,3 +150,65 @@ func TestASRRealDownload(t *testing.T) {
 	}
 	t.Logf("%s 组件就绪，用时 %v", mode, time.Since(start).Round(time.Second))
 }
+
+// 完整安装包自带快速模式组件：启动时直接从安装包装好、不联网；选精准但还没下好时先用快速，精准在后台下。
+func TestASRBundle(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "asr-bundle")
+	os.MkdirAll(bundle, 0o755)
+	makeZip(t, filepath.Join(bundle, asrRuntimeName()), map[string]string{exeName(): "#!/bin/sh\n", "silero_vad.onnx": "vad"})
+	zipData, _ := os.ReadFile(filepath.Join(bundle, asrRuntimeName()))
+	model, tokens := strings.Repeat("m", 300000), "tok"
+	os.WriteFile(filepath.Join(bundle, "model.int8.onnx"), []byte(model), 0o644)
+	os.WriteFile(filepath.Join(bundle, "tokens.txt"), []byte(tokens), 0o644)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		http.Error(w, "no", 404) // 网络不通也要能装好快速模式
+	}))
+	defer srv.Close()
+	oldParts, oldBundle := asrParts, asrBundleDir
+	defer func() { asrParts, asrBundleDir = oldParts, oldBundle }()
+	asrBundleDir = func() string { return bundle }
+	asrParts = func(mode string) []asrPart {
+		if mode == asrFast {
+			return []asrPart{
+				{Name: asrRuntimeName(), Size: int64(len(zipData)), SHA: sha(zipData), URLs: []string{srv.URL + "/rt.zip"}, Zip: true},
+				{Name: "model.int8.onnx", Size: int64(len(model)), SHA: sha([]byte(model)), URLs: []string{srv.URL + "/model"}},
+				{Name: "tokens.txt", Size: int64(len(tokens)), SHA: sha([]byte(tokens)), URLs: []string{srv.URL + "/tokens"}},
+			}
+		}
+		return []asrPart{{Name: "qwen3/decoder.int8.onnx", Size: 5, SHA: "x", URLs: []string{srv.URL + "/qwen"}}}
+	}
+	dataDir = dir
+	tr := NewTranscriber(filepath.Join(dir, "asr"), NewStore(t.TempDir()))
+	deadline := time.Now().Add(5 * time.Second)
+	for !tr.installed(asrFast) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !tr.installed(asrFast) {
+		t.Fatal("启动后应该从安装包装好快速模式")
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("从安装包装不该联网，实际请求了 %d 次", n)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "asr", "model.int8.onnx")); string(b) != model {
+		t.Fatal("模型没拷对")
+	}
+	// 默认精准、还没下好：这次用快速，精准在后台下（这里下载会失败，也不影响快速模式）
+	tr.SetMode(asrAccurate)
+	if m := tr.pickMode(); m != asrFast {
+		t.Fatalf("精准没下好时应该先用快速，实际 %s", m)
+	}
+	if err := tr.ensure(asrFast); err != nil {
+		t.Fatalf("后台在下精准时快速模式不该被卡住：%v", err)
+	}
+	for tr.bgAcc.Load() && time.Now().Before(deadline.Add(10*time.Second)) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	// 选的是快速：就用快速
+	tr.SetMode(asrFast)
+	if m := tr.pickMode(); m != asrFast {
+		t.Fatal("选快速就用快速")
+	}
+}

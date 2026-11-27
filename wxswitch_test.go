@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestPatchEngineConfigs(t *testing.T) {
@@ -77,4 +79,50 @@ func TestFindEngineConfigsFallbackWalk(t *testing.T) {
 	if files, err := findEngineConfigs(); len(files) != 0 || err != nil {
 		t.Fatal("没有目录时应该安静地返回空")
 	}
+}
+
+// Windows 默认网页模式：微信开着不动文件；微信一退出就自动改回网页模式（微信升级改回去也一样）。
+func TestLiteWatch(t *testing.T) {
+	root := t.TempDir()
+	oldRoot, oldRun, oldEvery, oldSettle := radiumRootFn, wechatRunningFn, watchEvery, watchSettle
+	defer func() { radiumRootFn, wechatRunningFn, watchEvery, watchSettle = oldRoot, oldRun, oldEvery, oldSettle }()
+	radiumRootFn = func() string { return root }
+	watchEvery, watchSettle = 20*time.Millisecond, 5*time.Millisecond
+	var running atomic.Bool
+	running.Store(true)
+	wechatRunningFn = running.Load
+	p := filepath.Join(root, "users", "wxid_a", "xworker", "liteapp", "local", "packages", "pkg", "engineConfig", "174", "dist", "engineConfig.json")
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	on := `{"featureSwitch":{"handleFinder":true}}`
+	os.WriteFile(p, []byte(on), 0o644)
+	isOn := func() bool { b, _ := os.ReadFile(p); return reHandleFinderOn.Match(b) }
+
+	l := &liteSwitcher{}
+	go l.watch()
+	time.Sleep(100 * time.Millisecond)
+	if !isOn() {
+		t.Fatal("微信开着时不该改它的文件")
+	}
+	running.Store(false) // 用户退出微信
+	waitFor(t, func() bool { return !isOn() }, "微信退出后应该自动改成网页模式")
+	if _, err := os.Stat(p + ".sphdl-bak"); err != nil {
+		t.Fatal("改之前要备份")
+	}
+	// 微信重新打开、升级后又改回自带播放器，再退出：又自动改回来
+	running.Store(true)
+	time.Sleep(60 * time.Millisecond)
+	os.WriteFile(p, []byte(on), 0o644)
+	running.Store(false)
+	waitFor(t, func() bool { return !isOn() }, "微信再次退出后应该再改回网页模式")
+}
+
+func waitFor(t *testing.T, ok func() bool, msg string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if ok() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal(msg)
 }

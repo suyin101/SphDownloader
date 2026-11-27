@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	version = "1.10.9"
+	version = "1.11.0"
 	uiPort  = 18889
 )
 
@@ -172,8 +172,10 @@ func main() {
 		logf("嗅探是关闭状态，需要时点右上角开关打开")
 	}
 	cleanupOldUpdate()
-	if cfg.LiteFix {
-		go liteSw.autoReapply()
+	// Windows 默认就用网页模式：启动时、以及之后每次微信退出时，发现视频号被改成了自带播放器就悄悄改回来，
+	// 下次打开微信就是网页模式，不用用户去点按钮。Mac 读微信数据会弹系统权限框，只有用户点过一次才这样做。
+	if runtime.GOOS == "windows" || cfg.LiteFix {
+		go liteSw.watch()
 	}
 	updater = NewUpdater()
 	go http.Serve(uiLn, uiHandler(store, &cfg))

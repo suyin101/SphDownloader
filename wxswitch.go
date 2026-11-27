@@ -101,6 +101,7 @@ type liteSwitcher struct {
 	checked time.Time
 	running bool
 	asked   bool // Mac：读微信数据会弹系统权限框，用户点过按钮才去读
+	lastSig string
 }
 
 var liteSw = &liteSwitcher{}
@@ -113,10 +114,16 @@ func (l *liteSwitcher) State() LiteSwitch {
 		l.checked = time.Now()
 		files, err := findEngineConfigs()
 		l.st.Files, l.st.On, l.st.Perm = len(files), false, errors.Is(err, errPermission)
+		on := 0
 		for _, f := range files {
 			if b, e := os.ReadFile(f); e == nil && reHandleFinderOn.Match(b) {
 				l.st.On = true
+				on++
 			}
+		}
+		if sig := fmt.Sprintf("%d/%d/%v", len(files), on, err); sig != l.lastSig { // 变了才记，排查 Windows 上找没找到配置文件
+			l.lastSig = sig
+			tracef("[切回网页模式] 微信配置文件 %d 个，开着自带播放器的 %d 个，err=%v，目录 %s", len(files), on, err, radiumRootFn())
 		}
 	}
 	return l.st
@@ -220,12 +227,42 @@ func (l *liteSwitcher) Start(onDone func()) error {
 	return nil
 }
 
+// watch 启动时改一次（微信没开的话），之后每 5 秒看一眼：微信从开着变成退出了，就再改一次。
+// 微信开着的时候不动它的文件（它可能正在用，改了也要重启才生效）。
+var (
+	wechatRunningFn = wechatRunning
+	watchEvery      = 5 * time.Second
+	watchSettle     = 2 * time.Second
+)
+
+func (l *liteSwitcher) watch() {
+	l.autoReapply()
+	was := wechatRunningFn()
+	for {
+		time.Sleep(watchEvery)
+		now := wechatRunningFn()
+		if was && !now {
+			l.mu.Lock()
+			busy := l.running // 用户点了按钮、Start 正在处理，别抢
+			l.mu.Unlock()
+			if !busy {
+				time.Sleep(watchSettle) // 等微信把文件写完
+				l.autoReapply()
+			}
+		}
+		was = now
+	}
+}
+
 // autoReapply 用户以前切过：软件启动时如果微信没开、开关又被微信改回去了（升级后会这样），悄悄再改一次。
 func (l *liteSwitcher) autoReapply() {
-	if wechatRunning() {
+	if wechatRunningFn() {
 		return
 	}
 	if n, err := patchEngineConfigs(); err == nil && n > 0 {
-		logf("微信把视频号又改回了自带播放器模式，已自动切回网页模式（%d 个文件）", n)
+		logf("微信的视频号是自带播放器模式，已自动改成网页模式（%d 个文件），下次打开微信生效", n)
+		l.mu.Lock()
+		l.checked = time.Time{} // 界面马上重新看状态
+		l.mu.Unlock()
 	}
 }

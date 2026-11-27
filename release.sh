@@ -23,6 +23,22 @@ rm -f dist/SphDownloader-windows.zip
 ./build-mac.sh >/dev/null
 rm -f dist/SphDownloader-mac.zip
 ditto -c -k --keepParent "dist/mac/视频号下载器.app" dist/SphDownloader-mac.zip
+# 完整安装包：自带快速模式转文字组件（约 240MB），装好就能转文字、不用联网下载。
+# 只给第一次安装用；自动更新仍下上面的小包（updater 认的是固定文件名），已装好的组件留在数据目录里不受影响。
+M=$(ls -d asr-build/sv24/*/ 2>/dev/null | head -1); P=asr-build/pack
+[ -f "$M/model.int8.onnx" ] && [ -f $P/asr-runtime-windows-amd64.zip ] || { echo "缺 asr-build（见 CLAUDE.md 转文字一节）"; exit 1; }
+rm -rf dist/mac-full dist/win-full
+mkdir -p dist/mac-full && cp -R "dist/mac/视频号下载器.app" dist/mac-full/
+B="dist/mac-full/视频号下载器.app/Contents/Resources/asr-bundle"; mkdir -p "$B"
+cp $P/asr-runtime-mac-arm64.zip $P/asr-runtime-mac-x86_64.zip "$M/model.int8.onnx" "$M/tokens.txt" "$B/"
+codesign --force --deep -s - "dist/mac-full/视频号下载器.app" 2>/dev/null || true
+rm -f dist/SphDownloader-mac-full.zip
+ditto -c -k --keepParent "dist/mac-full/视频号下载器.app" dist/SphDownloader-mac-full.zip
+mkdir -p dist/win-full && cp -R dist/win/视频号下载器 dist/win-full/
+B=dist/win-full/视频号下载器/asr-bundle; mkdir -p $B
+cp $P/asr-runtime-windows-amd64.zip "$M/model.int8.onnx" "$M/tokens.txt" $B/
+rm -f dist/SphDownloader-windows-full.zip
+(cd dist/win-full && zip -qr ../SphDownloader-windows-full.zip 视频号下载器)
 ls -lh dist/SphDownloader-*
 
 if [ "$1" = "--publish" ]; then
@@ -43,7 +59,8 @@ if [ "$1" = "--publish" ]; then
     for f in vocab.json merges.txt tokenizer_config.json; do cp $Q/tokenizer/$f $T/tokenizer_$f; done
     gh release upload asr-v1 $T/* && rm -rf $T
   fi
-  gh release create "v$VER" dist/SphDownloader-windows.zip dist/SphDownloader-windows.exe dist/SphDownloader-mac.zip \
+  gh release create "v$VER" dist/SphDownloader-windows-full.zip dist/SphDownloader-mac-full.zip \
+    dist/SphDownloader-windows.zip dist/SphDownloader-windows.exe dist/SphDownloader-mac.zip \
     --title "v$VER" --notes "$NOTES" --latest
   echo "已发布 v$VER"
 fi

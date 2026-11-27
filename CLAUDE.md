@@ -123,3 +123,15 @@ auto mode 下 Claude 不能自己启动软件（会改系统代理/装证书）�
   或文字（createtime "1795…"、fileSize "123"）会让整条上报失败。现在：inject.js num() 全部转整数、文本 String()；Unmarshal 失败记“页面的上报格式不对，没收下”；
   另外每次认出正在看先发一条很小的 kind=playing（id + 地址），store.OnPlaying(id, src) 按编号/encfilekey 把列表里已有的排第一；keepalive 只用于 <8KB 的上报（浏览器合计 64KB 限额）。
   端到端测试 e2e_page_test.go + testdata/page_sim.js：真 inject.js 在假页面里生成上报 → handleReport → 检查列表顺序。INJECT_JS=旧脚本 可对照（旧的数字处理会失败）。
+- 【内置转文字 v1.11.0，未发版】用户选“只内置快速模式”。发版多了两个完整安装包 SphDownloader-mac-full.zip（约 178MB）/ SphDownloader-windows-full.zip（约 164MB），
+  里面带 asr-bundle/（mac 两个架构的 runtime zip 或 windows runtime zip + SenseVoice model.int8.onnx + tokens.txt）。Mac 在 .app/Contents/Resources/asr-bundle（加完重新 ad-hoc 签名），Windows 在 exe 旁边。
+  自动更新仍只下小包（updater 认固定文件名），已装组件在 dataDir/asr 不受影响。transcribe.go：asrBundleDir / bundled(p)：fetchPart 先拷安装包里的（同样校验 sha256），
+  NewTranscriber 发现快速没装、安装包里有就后台直接装（约 0.4 秒）；pickMode：选精准但没下好、快速能用 → 这次用快速，精准后台下（bgAcc）；ensure 已装好时不等 dlMu（后台下精准不卡快速）。
+  测试 TestASRBundle（断网也能装、不发请求）；2026-11-27 用 dist/mac-full 的真组件离线装好 + 73 秒口播 3 秒转完、文字正确。Windows 完整包没实测。
+- 2026-11-27 Windows trace(5).log（v1.10.9）：那台仍是自带播放器模式（只有 /20302/ /20304/ /20350/ 请求 + 内存扫描），用户没点过「切回网页模式」，所以网页模式的修复都用不上。
+  ltaoo v261123 在 LiteApp 里注入的做法：LiteApp 页面（liteapp.weixin.qq.com/a/finder/wxalite…）会从 res.wx.qq.com 加载 libpag.min.js，它把 runtime.js 拼在后面；
+  因为微信缓存了这个脚本，要在微信退出时移走 %APPDATA%\Tencent\xwechat\radium\web\profiles\*\Cache\Cache_Data 才会重新走代理。同样要退出一次微信，不如切回网页模式。
+  v1.11.0 起 wxswitch State() 变化时记 trace“[切回网页模式] 微信配置文件 N 个，开着自带播放器的 M 个”。
+- 【Windows 默认网页模式 v1.11.0】用户要求 Windows 默认就是网页模式。main.go：Windows（或 Mac 上 cfg.LiteFix）启动 liteSw.watch()：
+  启动时微信没开就改；之后每 5 秒看微信进程，从开着→退出时（等 2 秒）再 patchEngineConfigs。微信开着时不动文件。Mac 不默认（读微信容器会弹权限框）。
+  测试 TestLiteWatch（wechatRunningFn / watchEvery 可替换）。

@@ -350,7 +350,7 @@ function renderLite(st) {
   if (l.status === 'waiting') text = '请<b>完全退出微信</b>：' + quit + '。退出后软件会自动修改，并重新打开微信。';
   else if (l.status === 'done') text = '已切回网页模式，微信正在重新打开。打开后从左侧<b>「视频号」</b>进入，点开的视频会马上出现在下面。';
   else if (l.status === 'error') { text = '切换失败：' + esc(l.err) + (l.perm ? '。请在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 里打开「视频号下载器」，再点一次。' : ''); btn = '再试一次'; }
-  else if (l.on || st.page === 'lite') { text = '微信的视频号现在用的是<b>自带播放器</b>模式：要从内存里找钥匙，慢，还容易把下一条当成正在看的。<b>切回网页模式</b>后，视频一点开就出现（需要重启一次微信，软件会帮你重新打开）。'; btn = '切回网页模式（推荐）'; }
+  else if (l.on || st.page === 'lite') { text = '微信的视频号现在用的是<b>自带播放器</b>模式：要从内存里找钥匙，慢，还容易把下一条当成正在看的。<b>切回网页模式</b>后，视频一点开就出现（需要重启一次微信，软件会帮你重新打开）。' + (mac ? '' : '不点也行：下次你退出微信时软件会自动切好。'); btn = '切回网页模式（推荐）'; }
   else if (mac && st.sniff && !st.online) { text = '打开视频号后这里一直没反应？可能是微信改用了自带播放器模式，可以切回网页模式（第一次会请你允许读取微信的数据）。'; btn = '切回网页模式'; }
   if (l.status === 'done' && st.online) text = '';
   $('liteBanner').style.display = text ? '' : 'none';
@@ -395,7 +395,7 @@ function render() {
   var apct = a.total > 0 ? Math.floor(a.progress / a.total * 100) : 0;
   $('asrBanner').style.display = (a.status === 'downloading' || a.status === 'error') ? '' : 'none';
   $('asrText').innerHTML = a.status === 'downloading'
-    ? '正在下载' + (a.mode === 'fast' ? '快速' : '精准') + '模式的转文字组件… <b>' + apct + '%</b>（' + mb(a.progress) + ' / ' + mb(a.total) + '，只需下载一次）'
+    ? '正在下载' + (a.mode === 'fast' ? '快速' : '精准') + '模式的转文字组件… <b>' + apct + '%</b>（' + mb(a.progress) + ' / ' + mb(a.total) + '，只需下载一次）' + (a.mode !== 'fast' && a.readyFast ? '，下好之前先用快速模式转，不用等' : '')
     : a.status === 'error' ? '转文字组件下载失败：' + esc(a.err) + '。检查网络后，再点一次“转文字”会接着下载。' : '';
   $('asrInfo').textContent = '视频下载完后，把说的话转成同名 .txt 文案（在本机识别，不上传）';
   document.querySelectorAll('input[name=asrMode]').forEach(function (r) { r.checked = r.value === (a.mode || 'accurate'); });
