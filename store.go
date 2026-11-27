@@ -114,6 +114,7 @@ type Item struct {
 	TxPct     int       `json:"txPct,omitempty"` // 转文字进度 0~100
 	fileKey   string
 	wantTx    bool     // 下载完就转文字（勾选“转文字”时还没下载的）
+	wantDl    bool     // 链接还在解析时就点了下载：解析好直接下
 	txChecked bool     // 已检查过视频旁边有没有现成的 .txt
 	ks        []byte   // 自带播放器模式：没有钥匙时用的钥匙流（lite.go）
 	images    []string // 公众号文章的原图地址（article.go）
@@ -136,6 +137,7 @@ type Store struct {
 	AutoDownload   bool
 	DownloadCover  bool
 	AutoTranscribe bool // 下载完自动转文字（默认关）
+	LinkAuto       bool // 粘贴链接解析好后直接下载（默认关：先显示出来让用户选）
 	tx             *Transcriber
 	Dir            string
 	gotCurrent     bool      // 收到过“正在看的视频”信号；没有的话才用视频请求来兜底
@@ -292,7 +294,8 @@ func (s *Store) matchTaskLocked(kind string, feeds []FeedInfo, href string) *lin
 			f.Cover = ph.Cover
 		}
 	}
-	items := s.addFeedsLocked([]FeedInfo{f}, true, true, "link")
+	want := s.LinkAuto || (ph != nil && (ph.wantTx || ph.wantDl))
+	items := s.addFeedsLocked([]FeedInfo{f}, false, want, "link")
 	if len(items) > 0 && ph != nil {
 		items[0].Seen = ph.Seen
 		items[0].Opened = ph.Opened // 链接下载保持粘贴时的顺序
@@ -304,8 +307,10 @@ func (s *Store) matchTaskLocked(kind string, feeds []FeedInfo, href string) *lin
 	if len(items) > 0 {
 		if items[0].Status == "done" {
 			logf("这个视频之前下载过，不再重复下载：%s", label(items[0]))
-		} else {
+		} else if want {
 			logf("链接已解析，开始下载：%s", label(items[0]))
+		} else {
+			logf("链接已解析：%s（点「下载」或「转文字」开始）", label(items[0]))
 		}
 	}
 	// 页面里同时带出来的其它视频（推荐列表）照常进列表
@@ -506,7 +511,9 @@ func (s *Store) addWebLocked(text string, base time.Time) int {
 				logf("%s：%s", webKind(it), label(it))
 			}
 			it.Status = "seen"
-			s.enqueueLocked(it, false)
+			if s.LinkAuto || it.wantDl || it.wantTx {
+				s.enqueueLocked(it, false)
+			}
 			s.mu.Unlock()
 		}
 	}()
@@ -680,6 +687,11 @@ func (s *Store) Enqueue(keys []string) int {
 	for _, k := range keys {
 		it, ok := s.items[k]
 		if !ok {
+			continue
+		}
+		if it.Status == "resolving" || it.Status == "waiting" { // 还在解析：解析好就下
+			it.wantDl = true
+			n++
 			continue
 		}
 		if strings.HasPrefix(k, "link:") { // 还没拿到视频地址的链接
@@ -1199,7 +1211,7 @@ func (s *Store) Transcribe(keys []string) (queued, downloading int) {
 				queued++
 			}
 		case "queued", "downloading", "waiting", "resolving":
-			it.wantTx = true
+			it.wantTx, it.wantDl = true, true
 			downloading++
 		case "seen", "error":
 			it.wantTx = true

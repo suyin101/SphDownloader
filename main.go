@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	version = "1.11.0"
+	version = "1.11.1"
 	uiPort  = 18889
 )
 
@@ -53,8 +53,9 @@ type config struct {
 	Sniff         *bool  `json:"sniff"`
 	AutoUpdate    *bool  `json:"autoUpdate"`
 	AutoTx        bool   `json:"autoTranscribe"`
-	AsrMode       string `json:"asrMode"` // accurate 精准（默认）/ fast 快速
-	LiteFix       bool   `json:"liteFix"` // 用户切过“网页模式”：以后微信升级改回去时自动再切
+	AsrMode       string `json:"asrMode"`  // accurate 精准（默认）/ fast 快速
+	LinkAuto      bool   `json:"linkAuto"` // 粘贴链接解析好后直接下载（默认关）
+	LiteFix       bool   `json:"liteFix"`  // 用户切过“网页模式”：以后微信升级改回去时自动再切
 }
 
 func loadConfig() config {
@@ -157,6 +158,7 @@ func main() {
 	}
 	store.DownloadCover = cfg.DownloadCover
 	store.AutoTranscribe = cfg.AutoTx
+	store.LinkAuto = cfg.LinkAuto
 	store.tx = NewTranscriber(filepath.Join(dataDir, "asr"), store)
 	store.tx.SetMode(cfg.AsrMode)
 	store.loadHistory(filepath.Join(dataDir, "history.json"))
@@ -269,6 +271,9 @@ type apiBody struct {
 	AutoUpdate *bool    `json:"autoUpdate"`
 	AutoTx     *bool    `json:"autoTranscribe"`
 	AsrMode    string   `json:"asrMode"`
+	LinkAuto   *bool    `json:"linkAuto"`
+	Logs       bool     `json:"logs"`
+	Asr        bool     `json:"asr"`
 }
 
 func uiHandler(store *Store, cfg *config) http.Handler {
@@ -291,7 +296,7 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		logs := append([]string(nil), logLines...)
 		logMu.Unlock()
 		store.mu.Lock()
-		dir, auto, cover, autoTx := store.Dir, store.AutoDownload, store.DownloadCover, store.AutoTranscribe
+		dir, auto, cover, autoTx, linkAuto := store.Dir, store.AutoDownload, store.DownloadCover, store.AutoTranscribe, store.LinkAuto
 		store.mu.Unlock()
 		var asr any
 		if store.tx != nil {
@@ -307,7 +312,7 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]any{
 			"version": version, "items": items, "logs": logs, "dir": dir,
-			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent, "autoTranscribe": autoTx, "asr": asr, "liteSwitch": liteSw.State(), "os": runtime.GOOS,
+			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent, "autoTranscribe": autoTx, "linkAuto": linkAuto, "asr": asr, "liteSwitch": liteSw.State(), "os": runtime.GOOS,
 		})
 	})
 	mux.HandleFunc("/api/coverimg", func(w http.ResponseWriter, r *http.Request) {
@@ -451,12 +456,16 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		if b.AutoTx != nil {
 			store.AutoTranscribe = *b.AutoTx
 		}
+		if b.LinkAuto != nil {
+			store.LinkAuto = *b.LinkAuto
+		}
 		if b.AsrMode != "" && store.tx != nil {
 			store.tx.SetMode(b.AsrMode)
 		}
-		auto, cover, autoTx := store.AutoDownload, store.DownloadCover, store.AutoTranscribe
+		auto, cover, autoTx, linkAuto := store.AutoDownload, store.DownloadCover, store.AutoTranscribe, store.LinkAuto
 		store.mu.Unlock()
 		save(func(c *config) {
+			c.LinkAuto = linkAuto
 			c.AutoDownload = &auto
 			c.DownloadCover = cover
 			c.AutoTx = autoTx
@@ -519,6 +528,12 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 	mux.HandleFunc("/api/applyupdate", post(func(b apiBody) (any, error) {
 		go updater.Apply()
 		return nil, nil
+	}))
+	mux.HandleFunc("/api/cachesize", post(func(b apiBody) (any, error) {
+		return cacheSizes(store), nil
+	}))
+	mux.HandleFunc("/api/clearcache", post(func(b apiBody) (any, error) {
+		return clearCache(store, b.Logs, b.Asr)
 	}))
 	mux.HandleFunc("/api/logs", post(func(b apiBody) (any, error) {
 		d := filepath.Join(dataDir, "debug")

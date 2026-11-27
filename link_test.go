@@ -27,12 +27,27 @@ https://channels.weixin.qq.com/web/pages/feed?eid=export%2FUzFfAgtgek&context_id
 	}
 }
 
-// 链接任务：页面打开 feed 页后上报 current，要对上任务、替换占位并强制下载（即使关了自动下载）
+// 链接任务：页面打开 feed 页后上报 current，要对上任务、替换占位。
+// 默认只解析不下载（等用户点）；开了“解析好就直接下载”或解析中点过下载时才下载。
 func TestLinkTaskMatch(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		linkAuto, want bool
+		dl             bool
+	}{{"默认只解析", false, false, false}, {"开了直接下载", true, false, true}, {"解析中点了下载", false, true, true}} {
+		t.Run(c.name, func(t *testing.T) { testLinkTaskMatch(t, c.linkAuto, c.want, c.dl) })
+	}
+}
+
+func testLinkTaskMatch(t *testing.T, linkAuto, wantDl, dl bool) {
 	s := NewStore(t.TempDir())
 	s.AutoDownload = false
+	s.LinkAuto = linkAuto
 	s.items["link:sph:abc"] = &Item{Key: "link:sph:abc", Source: "link", Status: "waiting", FeedInfo: FeedInfo{ID: "link:sph:abc", Title: "预览标题"}}
 	s.tasks = append(s.tasks, &linkTask{itemKey: "link:sph:abc", exportID: "export/E1", feedURL: "https://channels.weixin.qq.com/web/pages/feed?eid=export%2FE1", state: "pending"})
+	if wantDl {
+		s.Enqueue([]string{"link:sph:abc"})
+	}
 	if u := s.NextTask(); !strings.Contains(u, "E1") {
 		t.Fatal("task not handed out", u)
 	}
@@ -49,8 +64,12 @@ func TestLinkTaskMatch(t *testing.T) {
 		t.Fatal("placeholder should be replaced")
 	}
 	it := s.items["real"]
-	if it == nil || it.Source != "link" || it.Title != "预览标题" || (it.Status != "queued" && it.Status != "downloading" && it.Status != "error") {
+	if it == nil || it.Source != "link" || it.Title != "预览标题" {
 		t.Fatalf("bad item %+v", it)
+	}
+	started := it.Status == "queued" || it.Status == "downloading" || it.Status == "error"
+	if started != dl || (!dl && it.Status != "seen") {
+		t.Fatalf("status=%s, want download=%v", it.Status, dl)
 	}
 	if s.items["other"].Status != "seen" {
 		t.Fatal("auto download is off; other should not download")

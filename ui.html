@@ -174,7 +174,7 @@
       <div class="linkbox">
         <textarea id="links" placeholder="粘贴链接或整段分享文字，自动识别平台，可以一次贴很多条&#10;视频号 https://weixin.qq.com/sph/AuQGcNgaw　　公众号（无水印原图） https://mp.weixin.qq.com/s/xxxx&#10;抖音、小红书（无水印视频、原图） 例：2.87 复制打开抖音，看看【xxx的作品】… https://v.douyin.com/xxxx/"></textarea>
         <div class="side">
-          <button class="primary" id="addBtn" onclick="addLinks()">解析并下载</button>
+          <button class="primary" id="addBtn" onclick="addLinks()">解析</button>
           <button id="pasteBtn" onclick="pasteLinks()">从剪贴板粘贴</button>
         </div>
       </div>
@@ -227,6 +227,10 @@
       <input type="checkbox" id="optAuto" onchange="setOpt({auto:this.checked})">
     </div>
     <div class="switch">
+      <div>粘贴链接解析好就直接下载<small>默认关闭：先解析出标题封面，你再选下载或转文字</small></div>
+      <input type="checkbox" id="optLink" onchange="setOpt({linkAuto:this.checked})">
+    </div>
+    <div class="switch">
       <div>同时下载封面<small>视频下载完后，存一张同名 .jpg 封面图</small></div>
       <input type="checkbox" id="optCover" onchange="setOpt({cover:this.checked})">
     </div>
@@ -249,9 +253,31 @@
       <div><span id="ver"></span><small id="updInfo">　</small></div>
       <span><button onclick="checkUpdate()" id="chkBtn">检查更新</button> <button onclick="api('logs',{}).catch(fail)">日志文件夹</button></span>
     </div>
+    <div class="switch">
+      <div>清除缓存<small>只清软件自己的缓存，下载的视频、文案和设置都不会动</small></div>
+      <button onclick="showCache()">清除缓存…</button>
+    </div>
     <div class="dfoot">
       <span></span>
       <span><button class="danger" onclick="quitApp()">退出软件</button> <button class="primary" onclick="hide('setMask')">完成</button></span>
+    </div>
+  </div>
+</div>
+
+<div class="mask" id="cacheMask" onclick="if(event.target===this)hide('cacheMask')">
+  <div class="dialog">
+    <h3>清除缓存</h3>
+    <div class="switch">
+      <div>日志和临时文件 <b id="szLogs"></b><small>运行日志、调试文件、转文字的中间文件，清了不影响使用</small></div>
+      <input type="checkbox" id="ccLogs" checked>
+    </div>
+    <div class="switch">
+      <div>转文字组件 <b id="szAsr"></b><small id="asrNote">识别用的模型。清了以后再转文字要重新安装：快速模式安装包自带的会自动装回，精准模式要重新下载（约 1 GB）</small></div>
+      <input type="checkbox" id="ccAsr">
+    </div>
+    <div class="dfoot">
+      <span></span>
+      <span><button onclick="hide('cacheMask')">取消</button> <button class="primary" id="ccBtn" onclick="doClearCache()">清除</button></span>
     </div>
   </div>
 </div>
@@ -390,7 +416,7 @@ function render() {
     : u.status === 'available' ? '有新版本 v' + u.latest : u.status === 'error' ? u.err : '　';
   $('dir').textContent = st.dir; $('dir').title = st.dir;
   renderLite(st);
-  $('optAuto').checked = st.auto; $('optCover').checked = st.cover; $('optTx').checked = st.autoTranscribe;
+  $('optAuto').checked = st.auto; $('optLink').checked = !!st.linkAuto; $('optCover').checked = st.cover; $('optTx').checked = st.autoTranscribe;
   var a = st.asr || {};
   var apct = a.total > 0 ? Math.floor(a.progress / a.total * 100) : 0;
   $('asrBanner').style.display = (a.status === 'downloading' || a.status === 'error') ? '' : 'none';
@@ -556,7 +582,8 @@ function addLinks() {
   api('links', { text: text }).then(function (r) {
     $('links').value = '';
     var onlyMp = !/weixin\.qq\.com\/sph\/|finder-preview|[?&]eid=/.test(text);
-    toast('已添加 ' + r.n + ' 个链接' + (onlyMp ? '，正在解析下载' : !state.sniff ? '。视频号链接需要先打开右上角的“嗅探”' : state.online ? '，正在交给微信打开' : '，请打开微信视频号'));
+    var then = state.linkAuto ? '，正在解析下载' : '，正在解析，解析好后点「下载」或「转文字」';
+    toast('已添加 ' + r.n + ' 个链接' + (onlyMp ? then : !state.sniff ? '。视频号链接需要先打开右上角的“嗅探”' : state.online ? '，正在交给微信打开' : '，请打开微信视频号'));
     filter = 'all';
   }).catch(fail).finally(function () { $('addBtn').disabled = false; });
 }
@@ -608,6 +635,24 @@ function checkUpdate() {
 function applyUpdate() { api('applyupdate', {}).catch(fail); }
 function openDir() { api('open', {}).catch(fail); }
 function showSettings() { show('setMask'); }
+function showCache() {
+  $('szLogs').textContent = ''; $('szAsr').textContent = '';
+  api('cachesize', {}).then(function (r) {
+    $('szLogs').textContent = mb(r.logs) || '0 MB';
+    $('szAsr').textContent = mb(r.asr) || '没有';
+    $('ccAsr').disabled = !r.asr; if (!r.asr) $('ccAsr').checked = false;
+  }).catch(fail);
+  show('cacheMask');
+}
+function doClearCache() {
+  var o = { logs: $('ccLogs').checked, asr: $('ccAsr').checked };
+  if (!o.logs && !o.asr) { toast('先勾选要清除的内容'); return; }
+  $('ccBtn').disabled = true;
+  api('clearcache', o).then(function (r) {
+    toast('已清除，腾出 ' + (mb(r.freed) || '0 MB'));
+    hide('cacheMask');
+  }).catch(fail).finally(function () { $('ccBtn').disabled = false; });
+}
 function chooseDir() { api('choosedir', {}).then(function (r) { if (r.dir) $('dir').textContent = r.dir; }).catch(fail); }
 function setOpt(o) { api('settings', o).catch(fail); }
 function quitApp() {

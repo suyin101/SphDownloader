@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -182,6 +183,7 @@ type Transcriber struct {
 	mode  string
 	ready map[string]bool
 	bgAcc atomic.Bool // 精准模式组件正在后台下载
+	busy  atomic.Bool // 正在转
 }
 
 func NewTranscriber(dir string, store *Store) *Transcriber {
@@ -497,6 +499,31 @@ func unzipTo(src, dir string) error {
 	return nil
 }
 
+// Busy 正在转文字或正在装组件。
+func (t *Transcriber) Busy() bool {
+	t.mu.Lock()
+	dl := t.st.Status == "downloading"
+	t.mu.Unlock()
+	return dl || t.busy.Load() || t.bgAcc.Load() || len(t.queue) > 0
+}
+
+// Remove 删掉转文字组件（清除缓存用）。完整安装包自带的快速模式下次转文字时会自动重新装上。
+func (t *Transcriber) Remove() error {
+	t.dlMu.Lock()
+	defer t.dlMu.Unlock()
+	if err := os.RemoveAll(t.dir); err != nil {
+		return err
+	}
+	os.MkdirAll(t.dir, 0o755)
+	t.mu.Lock()
+	for m := range t.ready {
+		t.ready[m] = false
+	}
+	t.st.Status, t.st.Err, t.st.Progress = "missing", "", 0
+	t.mu.Unlock()
+	return nil
+}
+
 // ---- 排队转文字 ----
 
 func (t *Transcriber) Enqueue(it *Item) bool {
@@ -518,6 +545,7 @@ func (t *Transcriber) worker() {
 		}
 		it.Tx, it.TxPct = "running", 0
 		file, info := it.File, it.FeedInfo
+		t.busy.Store(true)
 		s.mu.Unlock()
 
 		txt, err := t.run(file, info, func(pct int) {
@@ -527,6 +555,7 @@ func (t *Transcriber) worker() {
 			}
 			s.mu.Unlock()
 		})
+		t.busy.Store(false)
 		s.mu.Lock()
 		if err != nil {
 			it.Tx, it.TxErr = "error", err.Error()
@@ -584,14 +613,33 @@ func (t *Transcriber) run(file string, info FeedInfo, onPct func(int)) (string, 
 	}
 	secs := float64(len(pcm)) / float64(rate)
 	onPct(8)
+	// 识别程序输出到管道时会攒着、最后一次性吐出来（实测 Mac / Windows 都这样），
+	// 所以进度主要按“用时 ÷ 预计用时”估，预计用时按这台电脑上次的实际速度算。
+	expect := t.expectSecs(mode, secs)
+	start := time.Now()
+	stop := make(chan struct{})
+	go func() {
+		tk := time.NewTicker(500 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				onPct(estPct(time.Since(start).Seconds(), expect))
+			}
+		}
+	}()
 	segs, err := t.recognize(mode, secs, func(at float64) {
 		if secs > 0 {
 			onPct(8 + int(at/secs*91))
 		}
 	})
+	close(stop)
 	if err != nil {
 		return "", err
 	}
+	t.saveSpeed(mode, secs, time.Since(start).Seconds())
 	if mode == asrAccurate { // Qwen3 输出汉字数字（五千七百万），统一成和快速模式一样的阿拉伯数字（5700万）
 		for i := range segs {
 			segs[i].Text = normalizeNumbers(segs[i].Text)
@@ -606,6 +654,52 @@ func (t *Transcriber) run(file string, info FeedInfo, onPct func(int)) (string, 
 		return "", err
 	}
 	return txt, nil
+}
+
+// estPct 按用时估进度：预计用时的 90% 之前匀速走到 89%，之后越来越慢地靠近 98%，不会卡死也不会到 100%。
+func estPct(elapsed, expect float64) int {
+	if expect <= 0 {
+		expect = 30
+	}
+	r := elapsed / expect
+	p := r
+	if r > 0.9 {
+		p = 0.9 + 0.09*(1-math.Exp(-(r-0.9)*3))
+	}
+	return 8 + int(p*90)
+}
+
+// expectSecs 预计要转多少秒：记下的这台电脑的速度（每秒能转几秒声音）+ 加载模型的时间。
+func (t *Transcriber) expectSecs(mode string, secs float64) float64 {
+	speed, load := 25.0, 3.0 // 快速模式的默认值
+	if mode == asrAccurate {
+		speed, load = 6, 6
+	}
+	if b, err := os.ReadFile(filepath.Join(t.dir, "speed-"+mode+".txt")); err == nil {
+		if v, e := strconv.ParseFloat(strings.TrimSpace(string(b)), 64); e == nil && v > 0.2 && v < 500 {
+			speed = v
+		}
+	}
+	return load + secs/speed
+}
+
+// saveSpeed 转完记下实际速度（和上次的平均一下，免得一次偶然的快慢影响太大）。太短的视频不记，加载时间占比太大。
+func (t *Transcriber) saveSpeed(mode string, secs, took float64) {
+	if secs < 20 || took < 1 {
+		return
+	}
+	load := 3.0
+	if mode == asrAccurate {
+		load = 6
+	}
+	v := secs / math.Max(took-load, took/2)
+	f := filepath.Join(t.dir, "speed-"+mode+".txt")
+	if b, err := os.ReadFile(f); err == nil {
+		if old, e := strconv.ParseFloat(strings.TrimSpace(string(b)), 64); e == nil && old > 0 {
+			v = old*0.5 + v*0.5
+		}
+	}
+	os.WriteFile(f, []byte(strconv.FormatFloat(v, 'f', 2, 64)), 0o644)
 }
 
 type asrSeg struct {
