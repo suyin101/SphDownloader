@@ -136,7 +136,7 @@ auto mode 下 Claude 不能自己启动软件（会改系统代理/装证书）�
   启动时微信没开就改；之后每 5 秒看微信进程，从开着→退出时（等 2 秒）再 patchEngineConfigs。微信开着时不动文件。Mac 不默认（读微信容器会弹权限框）。
   测试 TestLiteWatch（wechatRunningFn / watchEvery 可替换）。
 
-## v1.11.1（2026-11-27，未发版）
+## v1.11.1（2026-11-27 已发版）
 - 转文字卡 8%：sherpa-asr 输出到管道时结果攒到最后一次性吐出（Mac/Windows 都是，接终端才逐句输出），所以进度改成按用时估：asr/speed-<mode>.txt 记这台电脑实际速度（每秒转几秒声音），estPct 到预计用时 90% 前匀速、之后慢慢靠近 98%。
 - 链接默认只解析（状态 seen，用户点下载/转文字）；设置「粘贴链接解析好就直接下载」=LinkAuto；解析中点下载记 wantDl。
 - 清除缓存（cache.go）：只清 debug/、asr/work、asr/*.part，可选删 asr/ 整个组件；设置、证书、history、视频不动；转文字中不让删组件。
