@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	version = "1.9.2"
+	version = "1.10.9"
 	uiPort  = 18889
 )
 
@@ -53,6 +54,7 @@ type config struct {
 	AutoUpdate    *bool  `json:"autoUpdate"`
 	AutoTx        bool   `json:"autoTranscribe"`
 	AsrMode       string `json:"asrMode"` // accurate 精准（默认）/ fast 快速
+	LiteFix       bool   `json:"liteFix"` // 用户切过“网页模式”：以后微信升级改回去时自动再切
 }
 
 func loadConfig() config {
@@ -170,6 +172,9 @@ func main() {
 		logf("嗅探是关闭状态，需要时点右上角开关打开")
 	}
 	cleanupOldUpdate()
+	if cfg.LiteFix {
+		go liteSw.autoReapply()
+	}
 	updater = NewUpdater()
 	go http.Serve(uiLn, uiHandler(store, &cfg))
 	go autoUpdateLoop(store, &cfg)
@@ -300,7 +305,7 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]any{
 			"version": version, "items": items, "logs": logs, "dir": dir,
-			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent, "autoTranscribe": autoTx, "asr": asr,
+			"auto": auto, "cover": cover, "sniff": sniffer.On(), "sniffErr": sniffer.LastErr(), "online": store.PageState() == "online" || store.PageState() == "lite", "page": store.PageState(), "currentKey": store.CurrentKey(), "update": upd, "autoUpdate": autoUpd, "gotCurrent": gotCurrent, "autoTranscribe": autoTx, "asr": asr, "liteSwitch": liteSw.State(), "os": runtime.GOOS,
 		})
 	})
 	mux.HandleFunc("/api/coverimg", func(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +407,9 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 			return nil, err
 		}
 		return map[string]string{"text": txt, "file": file}, nil
+	}))
+	mux.HandleFunc("/api/litefix", post(func(b apiBody) (any, error) {
+		return nil, liteSw.Start(func() { save(func(c *config) { c.LiteFix = true }) })
 	}))
 	mux.HandleFunc("/api/clear", post(func(b apiBody) (any, error) {
 		return map[string]int{"n": store.Clear()}, nil

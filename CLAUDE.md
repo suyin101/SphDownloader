@@ -55,6 +55,19 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   预加载的照样在后台找钥匙，找到后 state=resolved 藏着（lm.res），划到它（played 变 true）时 liteShowLocked 立即显示并设为正在看；预加载时失败的，播放后重找。
   提速：memScan(includeMain, first, fn(pid,buf), stop) 每读完一个进程就对一次钥匙，正在播的都对上就停；对上的进程记进 hot（最多 3 个）下次先读；有正在播的在等时扫描间隔 1 秒（否则 4 秒）。
   日志里有“自带播放器请求 … Content-Range=… m=…”和“钥匙在进程 X 里找到（…，用时）”，下次排查看这两行。
+- 【切回网页模式 v1.10.0，wxswitch.go】根治自带播放器模式的慢和“分不清正在看/预加载”：微信 4.2 起视频号按账号灰度用 LiteApp 渲染，开关在
+  engineConfig.json 的 featureSwitch.handleFinder，改 false 重启微信就回网页（ltaoo #604/#623 多人在 Windows 4.2.0.53 实测有效）。
+  路径：Windows %APPDATA%\Tencent\xwechat\radium\users\<账号>\xworker\liteapp\local\packages\<包>\engineConfig\<版本>\dist\engineConfig.json；
+  Mac ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/app_data/radium/（同结构；读它会弹“访问其他 App 数据”权限，所以 Mac 上用户点按钮才去读）。
+  流程：界面提示 → 点「切回网页模式」→ 微信开着就等用户退出（最多 5 分钟）→ 只把 "handleFinder": true 改 false（第一次备份 .sphdl-bak，改完校验 JSON）→ 重新打开微信。
+  config.liteFix=true 后，以后启动时微信没开、开关被微信升级改回去了就自动再改。内存扫描（lite.go）保留作兜底。
+  2026-11-27 发现 Mac 微信 4.1.15 也有 XPlayer 进程、视频号页面不再上报，很可能 Mac 也被灰度成 LiteApp（Claude 的终端没权限读微信容器，没法确认）。
+  lite.go 的“/20302/=正在看”规则：用户说 v1.9.2 第一行仍是下一条，说明这个判断不对，要看用户 Windows 新日志里“自带播放器请求 … Content-Range=…”再定。
+- 【网页模式“正在看” v1.10.2】页面钩子（goToNextFlowFeed 等）报的“正在看”是准的，以它为准。v1.10.1 加的“播放器往后读=正在看”是错的：
+  2026-11-27 Mac 日志显示每划到一条，播放器同一秒预加载下一条，而且预加载也读到几 MB，结果第一行总是下一条。
+  现在 store.OnWebMedia 只作兜底：钩子 15 秒内报过就完全不管；兜底时同一条离第一次往后读 ≥3 秒还在读才算（预加载一阵就完），改完 4 秒内不再改。
+  上报带 via（哪个钩子）和 current 的标题，trace 里“report kind=current … via=goToNextFlowFeed｜作者：标题”。
+  之前“刷几条后不更新”多半是页面用的旧脚本（日志“视频号页面的脚本是旧的，让它自动刷新”之后就正常了）。
 - 【缩略图 v1.7.1】封面经 /api/coverimg 由软件代取（Windows 网页控件直接加载微信图片可能失败）；自带播放器模式没有封面，界面用 /api/preview 截视频第 1 秒一帧（pumpFrames，一次一个）。
   界面截图用 Electron（headless Chrome 不支持 H.264）：AutoCut 的 node_modules/.bin/electron 离屏打开 DEMO 页面 capturePage。
 - 【小红书 v1.8.0】xhs.go：识别 xhslink.cn/o/…、xiaohongshu.com/discovery/item|explore/<24位id>（整段分享文字直接贴），手机 UA 打开分享页读 window.__INITIAL_STATE__（undefined 要换成 null），
@@ -78,3 +91,35 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
 测试：`SAMPLE_MP4=任意大于128KB的mp4 LIVE=1 go test -race ./...`；界面截图：`DEMO=1 COVER=x.jpg go test -run TestUIDemo` 后访问 127.0.0.1:18899。
 打包：`DEBUG=1 ./build-mac.sh`（Mac .app，DEBUG 记录 ~/Library/Application Support/SphDownloader/debug/）；`./release.sh`（Windows zip）。
 auto mode 下 Claude 不能自己启动软件（会改系统代理/装证书），要用户双击。
+- 【断线补报 v1.10.3】2026-11-27 Mac 日志：下载器重启 / 嗅探关了又开期间，微信里开着的视频号页面照常刷，报的视频全丢（发到了真服务器），
+  重开后页面脚本版本没变不会刷新，列表一直 0 条（日志狂刷“正在播的视频不在列表里”）。ltaoo 的说明也只能让用户重开窗口。
+  现在 inject.js 自己记住看过的视频（memo，最多 300 条 + 最后一条 current），轮询 /__sphdl/task 失败过又连上、或服务端返回 resend:true 时整批补报（via=resend:…，8 秒内最多一次）。
+  服务端 store.TakeResend：刚启动还没收到过上报，或 OnWebMedia 发现正在播的不在列表里（每条只请求一次、只记一次日志）时为 true。
+- 【接口总出口钩子 v1.10.4】用户反映列表到 22 条（开头 preload 8 + finderUserPage 15）就不再增加。trace 统计：每次启动“列表”上报只有开头两三次，
+  之后新视频全靠 goToNextFlowFeed 的 current 带进来，有的页面/播放流不触发。页面接口走微信 JSAPI（不走网络、JSON.parse 兜底也看不到）。
+  现在 jsPost 改写 `async post(t){try{return await this.invoke(t)}`（两个传输类都有），所有接口返回都报 list（via=post:接口名）。
+  injectVersion = sha1(injectJS + patchRev)：改了改写规则要改 patchRev，开着的页面才会自动刷新。
+  patch_real_test.go：`REAL_JS=保存的页面脚本 OUT_JS=输出.mjs go test -run TestPatchRealFile -v` 再 node --check 输出，检查真实脚本改写结果。
+- 【播放器监听 v1.10.5】v1.10.4 日志：在作者主页点开视频看时 goToNextFlowFeed 一次没触发，只能等播放器兜底（慢十几秒）。
+  inject.js 在 document 上捕获 play/playing，300ms 后还在播、画面够大（≥200×150，排除小预览）就沿 parentElement 找 __vueParentComponent，
+  再沿 inst.parent 往上找 props/setupState 里第一个带 objectDesc.media 的对象（最近的组件就是这条视频，不会拿到整个列表），报 current（via=video-play），同一条不重复报。
+- 【当前第几条钩子 v1.10.6】v1.10.5 日志：goToNextFlowFeed 只在前两条触发，之后点击/连播/详情页切换都不走它；播放器监听在页面组件里也没找到数据。
+  根上的状态是 FlowFeedList.setCurrentFeedIndex（所有播放流切换当前条都走它，点列表里的视频也是 Mi→setCurrentFeedIndex），
+  jsSetCurIdx 改写 `}setCurrentFeedIndex(t,n){` 开头加 setTimeout 报 this.currentFeed（via=setCurrentFeedIndex）。patchRev=2026-11-27-curidx。
+  播放器监听没找到数据时，日志“页面：播放器开始播放，但没找到…：组件名(属性名) < …”，按这个再改 feedOfVideo。
+- 【v1.10.7 正在看三路并行】v1.10.6 日志：setCurrentFeedIndex 钩子一次没报——goToNextFlowFeed 是直接 this.currentFeedIndex=c 赋值，不走它；
+  播放器监听报“没有 Vue 组件”——正式版 Vue 不在 DOM 上挂 __vueParentComponent。改成：
+  ① jsCurIdxField 把 FlowFeedList 的 `currentFeedIndex=0;` 字段换成 getter/setter（backing 字段 __sphCi），任何赋值都报 current（via=currentFeedIndex）；
+     已用真 @vue/reactivity 验证界面响应不受影响（scratchpad 里测的，Vue 在 ref(Map) 里包着 FlowFeedList）。
+  ② inject.js feedOfVideo 从 #app._vnode 往下走，只进 el 包含该 <video> 的分支，取路上最近一个 props/setupState 里带 objectDesc.media 的对象；
+  ③ 取不到就把 video.currentSrc 报为 kind=playing，store.OnPlaying 按 encfilekey 对列表（对不上就 needResend 让页面补报）。blob: 地址对不上属正常。
+  日志看“页面：播放器开始播放，没取到视频数据：原因，地址 …”和“播放器开始播放：… 正在看”。
+- 【v1.10.8 每秒看画面上正在播的视频】v1.10.7 日志：currentFeedIndex 取值器一次没报（原因没查明，可能执行的不是那份类），video-play 只报了第一条（播放器复用同一个 <video>、祖先组件拿着旧 feed，去重后不再报）。
+  inject.js checkPlaying 每秒 + play 事件：取画面上最大的正在播 <video>，从 Vue 根沿包含它的分支收集 lists（有 feeds+currentFeedIndex 的播放流）和 feeds（组件属性里的视频），
+  优先级：播放地址 encfilekey 对上的 > 最近播放流的 currentFeed > 最近组件的 feed。每认出一条新的发日志“页面：正在播（poll/play）：方式｜标题｜流N 组件N｜地址”，没认出也发（变化时）。
+  用户再说不跳第一行，先 grep“页面：正在播”看是哪种方式、认成了哪条。
+- 【v1.10.9 认出了却不跳第一行】v1.10.8 日志：页面每条都认对了（“页面：正在播…”标题在变），但一条 report kind=current 都没到——
+  上报的 JSON 被 handleReport 的 json.Unmarshal 拒收、而且以前不记日志。FeedInfo 的 duration/createtime/width 等是 int，页面数据里小数（videoPlayLen 37.5）
+  或文字（createtime "1795…"、fileSize "123"）会让整条上报失败。现在：inject.js num() 全部转整数、文本 String()；Unmarshal 失败记“页面的上报格式不对，没收下”；
+  另外每次认出正在看先发一条很小的 kind=playing（id + 地址），store.OnPlaying(id, src) 按编号/encfilekey 把列表里已有的排第一；keepalive 只用于 <8KB 的上报（浏览器合计 64KB 限额）。
+  端到端测试 e2e_page_test.go + testdata/page_sim.js：真 inject.js 在假页面里生成上报 → handleReport → 检查列表顺序。INJECT_JS=旧脚本 可对照（旧的数字处理会失败）。

@@ -48,13 +48,22 @@ var (
 	jsCommentDetail = regexp.MustCompile(`async finderGetCommentDetail\((\w+)\)\{(.*?)\}async`)
 	jsPcFlow        = regexp.MustCompile(`async finderPcFlow\((\w+)\)\{(.*?)\}async`)
 	jsRecommend     = regexp.MustCompile(`async finderGetRecommend\((\w+)\)\{(.*?)\}async`)
+	// 页面所有接口（走微信 JSAPI，不走网络）的总出口：async post(t){try{return await this.invoke(t)}…
+	// 不管首页加载更多用的是 finderPcFlow / finderStream / 以后改成什么名字，结果都从这里过。
+	jsPost = regexp.MustCompile(`async post\(([a-zA-Z_$][a-zA-Z0-9_$]*)\)\{try\{return await this\.invoke\(([a-zA-Z_$][a-zA-Z0-9_$]*)\)\}`)
+	// FlowFeedList 的 currentFeedIndex=0 字段：改成 getter/setter，谁改“当前第几条”都知道（划动、点击、连播、详情页切换，
+	// goToNextFlowFeed 直接赋值、不走 setCurrentFeedIndex，所以只钩函数会漏）。
+	jsCurIdxField   = regexp.MustCompile(`(class FlowFeedList extends [a-zA-Z_$][a-zA-Z0-9_$]*\{[^{}]*?)currentFeedIndex=0;`)
 	jsUserPage      = regexp.MustCompile(`async finderUserPage\((\w+)\)\{(.*?)\}async`)
 	jsRecommendTabs = regexp.MustCompile(`async getRecommendTabsFromService\(\)\{(.*?)\}(async\b|\}const\b)`)
 )
 
 // injectVersion 注入脚本的指纹。页面上的脚本和它不一致时，让页面自己刷新。
+// patchRev 改了 patchFinderJS 的改写规则就改它，开着的页面会自动刷新换上新规则。
+const patchRev = "2026-11-27-curidx2"
+
 var injectVersion = func() string {
-	h := sha1.Sum([]byte(injectJS))
+	h := sha1.Sum([]byte(injectJS + patchRev))
 	return hex.EncodeToString(h[:4])
 }()
 
@@ -65,7 +74,7 @@ func wrapAsync(re *regexp.Regexp, js, name, kind string) (string, bool) {
 	if !re.MatchString(js) {
 		return js, false
 	}
-	tpl := `async ` + name + `($1){var __r=await (async()=>{$2;})();try{window.__sphdl&&window.__sphdl("` + kind + `",__r)}catch(e){}return __r}async`
+	tpl := `async ` + name + `($1){var __r=await (async()=>{$2;})();try{window.__sphdl&&window.__sphdl("` + kind + `",__r,"` + name + `")}catch(e){}return __r}async`
 	return re.ReplaceAllString(js, tpl), true
 }
 
@@ -74,7 +83,7 @@ func flowFeedHook(js string, re *regexp.Regexp, method, varName string) (string,
 		return js, false
 	}
 	v := esc(varName)
-	tpl := method + `:async function(...a){var __r=await $1(...a);try{var s=` + v + `&&` + v + `.value;if(s&&s.feeds)window.__sphdl&&window.__sphdl("current",s.feeds[s.currentFeedIndex])}catch(e){}return __r}`
+	tpl := method + `:async function(...a){var __r=await $1(...a);try{var s=` + v + `&&` + v + `.value;if(s&&s.feeds)window.__sphdl&&window.__sphdl("current",s.feeds[s.currentFeedIndex],"` + method + `");else window.__sphdl&&window.__sphdl("current",null,"` + method + `:没有feeds")}catch(e){}return __r}`
 	return re.ReplaceAllString(js, tpl), true
 }
 
@@ -99,7 +108,7 @@ func patchFinderJS(path, js string) (string, []string) {
 	var ok bool
 	if strings.Contains(path, "virtual_svg-icons-register") {
 		if jsPreload.MatchString(js) {
-			js = jsPreload.ReplaceAllString(js, ` (async()=>{const __r=await $1;try{window.__sphdl&&window.__sphdl("list",__r)}catch(e){}return __r})();(`)
+			js = jsPreload.ReplaceAllString(js, ` (async()=>{const __r=await $1;try{window.__sphdl&&window.__sphdl("list",__r,"preload")}catch(e){}return __r})();(`)
 			add("preload", true)
 		}
 		js, ok = wrapAsync(jsCommentDetail, js, "finderGetCommentDetail", "current")
@@ -110,8 +119,16 @@ func patchFinderJS(path, js string) (string, []string) {
 		add("recommend", ok)
 		js, ok = wrapAsync(jsUserPage, js, "finderUserPage", "list")
 		add("userPage", ok)
+		if jsPost.MatchString(js) {
+			js = jsPost.ReplaceAllString(js, `async post($1){try{var __r=await this.invoke($2);try{window.__sphdl&&__r&&__r.data&&window.__sphdl("list",__r.data,"post:"+($1&&$1.name||""))}catch(e){}return __r}`)
+			add("post", true)
+		}
+		if jsCurIdxField.MatchString(js) {
+			js = jsCurIdxField.ReplaceAllString(js, `${1}__sphCi=0;get currentFeedIndex(){return this.__sphCi}set currentFeedIndex(v){var o=this.__sphCi;this.__sphCi=v;if(v!==o){var self=this;setTimeout(function(){try{var f=self.currentFeed;f&&f.id&&f.id!=="0"&&window.__sphdl&&window.__sphdl("current",f,"currentFeedIndex")}catch(e){}},0)}}`)
+			add("curIdx", true)
+		}
 		if jsRecommendTabs.MatchString(js) {
-			js = jsRecommendTabs.ReplaceAllString(js, `async getRecommendTabsFromService(){var __r=await (async()=>{$1;})();try{window.__sphdl&&window.__sphdl("list",__r)}catch(e){}return __r}${2}`)
+			js = jsRecommendTabs.ReplaceAllString(js, `async getRecommendTabsFromService(){var __r=await (async()=>{$1;})();try{window.__sphdl&&window.__sphdl("list",__r,"recommendTabs")}catch(e){}return __r}${2}`)
 			add("recommendTabs", true)
 		}
 	}
@@ -221,6 +238,9 @@ func newProxy(ca tls.Certificate, store *Store, upstream string) *goproxy.ProxyH
 		}
 		host := ctx.Req.URL.Hostname()
 		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if strings.HasSuffix(host, ".video.qq.com") && strings.Contains(ctx.Req.URL.Path, "stodownload") && strings.Contains(ct, "video") {
+			store.OnWebMedia(ctx.Req.URL.Query().Get("encfilekey"), rangeStart(resp.Header))
+		}
 		if strings.HasSuffix(host, ".video.qq.com") && strings.Contains(ctx.Req.URL.Path, "stodownload") {
 			if ek, want := store.OnLiteMedia(ctx.Req.URL.String(), ct, resp.Header, resp.StatusCode); want && resp.Body != nil && startsAtZero(resp.StatusCode, resp.Header) {
 				resp.Body = &headTap{r: resp.Body, fn: func(b []byte) { store.SetLiteHead(ek, b) }}
@@ -309,6 +329,8 @@ type reportPayload struct {
 	Href  string     `json:"href"`
 	Msg   string     `json:"msg"`
 	UA    string     `json:"ua"`
+	Via   string     `json:"via"` // 哪个钩子报上来的（排查用）
+	ID    string     `json:"id"`  // kind=playing：正在播的视频编号
 }
 
 func handleReport(r *http.Request, store *Store) *http.Response {
@@ -318,7 +340,7 @@ func handleReport(r *http.Request, store *Store) *http.Response {
 			return goproxy.NewResponse(r, "application/json", http.StatusOK, `{"reload":true}`)
 		}
 		u := store.NextTask()
-		b, _ := json.Marshal(map[string]any{"url": u, "inPlace": store.OpenInPlace()})
+		b, _ := json.Marshal(map[string]any{"url": u, "inPlace": store.OpenInPlace(), "resend": store.TakeResend()})
 		if u != "" {
 			logf("让微信打开视频：%s", trimURL(u))
 		}
@@ -326,7 +348,11 @@ func handleReport(r *http.Request, store *Store) *http.Response {
 	}
 	var p reportPayload
 	b, _ := io.ReadAll(io.LimitReader(r.Body, 20<<20))
-	if err := json.Unmarshal(b, &p); err == nil {
+	err := json.Unmarshal(b, &p)
+	if err != nil {
+		logf("页面的上报格式不对，没收下：%v（%s）", err, firstN(string(b), 200))
+	}
+	if err == nil {
 		switch p.Kind {
 		case "hello":
 			logf("视频号页面已连上：%s", trimURL(p.Href))
@@ -335,8 +361,19 @@ func handleReport(r *http.Request, store *Store) *http.Response {
 			logf("页面脚本出错：%s", p.Msg)
 		case "log":
 			logf("页面：%s", p.Msg)
+		case "playing":
+			if !store.OnPlaying(p.ID, p.Msg) {
+				tracef("播放地址：%s", trimURL(p.Msg))
+			}
 		default:
-			tracef("report kind=%s n=%d href=%s", p.Kind, len(p.Items), p.Href)
+			first := ""
+			if p.Kind == "current" && len(p.Items) > 0 {
+				first = "｜" + p.Items[0].Nickname + "：" + p.Items[0].Title
+				if r := []rune(first); len(r) > 30 {
+					first = string(r[:30])
+				}
+			}
+			tracef("report kind=%s n=%d via=%s%s href=%s", p.Kind, len(p.Items), p.Via, first, trimURL(p.Href))
 			store.AddReport(p.Kind, p.Items, p.Href)
 		}
 	}
@@ -348,6 +385,13 @@ func handleReport(r *http.Request, store *Store) *http.Response {
 func trimURL(s string) string {
 	if i := strings.Index(s, "?"); i >= 0 {
 		return s[:i]
+	}
+	return s
+}
+
+func firstN(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
 }

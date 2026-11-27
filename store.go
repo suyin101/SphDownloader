@@ -149,6 +149,11 @@ type Store struct {
 	lite           map[string]*liteMedia // 自带播放器模式看到的视频（lite.go）
 	liteKick       chan struct{}
 	liteSeen       time.Time
+	webMedia       map[string]time.Time // 网页模式下每条视频第一次“往后读”的时间（OnWebMedia）
+	hookCurrent    time.Time            // 页面钩子最近一次报“正在看”
+	webMarked      time.Time            // 播放器兜底最近一次改“正在看”
+	webUnknown     map[string]bool      // 正在播但列表里没有的视频（只记一次日志）
+	needResend     bool                 // 让页面把它记住的视频重新报一遍（下载器重启期间报的丢了）
 }
 
 func NewStore(dir string) *Store {
@@ -197,6 +202,7 @@ func (s *Store) AddReport(kind string, feeds []FeedInfo, href string) {
 	current := kind == "current"
 	if current {
 		s.gotCurrent = true
+		s.hookCurrent = time.Now()
 	}
 	if t := s.matchTaskLocked(kind, feeds, href); t != nil {
 		return
@@ -558,6 +564,41 @@ func (s *Store) NextTask() string {
 	return ""
 }
 
+// OnPlaying 页面里的播放器开始播放（inject.js 监听 play），带着播放地址。地址里的 encfilekey 对上列表里的就是正在看，
+// 比 OnWebMedia（看代理流量猜）准而且快。返回是否对上。
+func (s *Store) OnPlaying(id, src string) bool {
+	ek := encFileKey(src)
+	if ek == "" && id == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it := s.items[id]
+	if it == nil && ek != "" {
+		for _, x := range s.items {
+			if x.fileKey == ek && x.Source != "lite" {
+				it = x
+				break
+			}
+		}
+	}
+	if it != nil {
+		now := time.Now()
+		it.Opened, s.currentKey, s.hookCurrent, s.gotCurrent = now, it.Key, now, true
+		tracef("播放器开始播放：%s 正在看", label(it))
+		if s.AutoDownload && it.Status != "done" {
+			s.enqueueLocked(it, false)
+		}
+		return true
+	}
+	if ek == "" {
+		return false // 只有编号、列表里还没有：等紧跟着的完整上报
+	}
+	s.needResend = true
+	tracef("播放器开始播放的视频不在列表里（%s）：让页面补报", shortEK(ek))
+	return false
+}
+
 // OnMediaRequest 播放器去拉视频文件时调用。只有页面钩子没生效时才用它触发自动下载。
 func (s *Store) OnMediaRequest(fileKey string) {
 	s.mu.Lock()
@@ -571,6 +612,64 @@ func (s *Store) OnMediaRequest(fileKey string) {
 			return
 		}
 	}
+}
+
+// OnWebMedia 网页模式下播放器拉视频文件时调用（代理看到响应），页面钩子漏报时的兜底。
+// 2026-11-27 Mac 日志：每划到一条，播放器同一秒就会预加载下一条，而且预加载也会读到几 MB（不只是开头），
+// 所以“往后读”不能直接算正在看（v1.10.1 这样做，结果第一行老是下一条）。现在：
+//
+//	① 页面钩子 15 秒内报过“正在看”就完全听钩子的（钩子是页面自己的状态，最准）；
+//	② 兜底时，预加载是一阵就完，真在播的会持续读：同一条视频离它第一次往后读 ≥3 秒还在读，才算正在看；
+//	③ 刚改过正在看的 4 秒内不再改（划走后上一条收尾的请求不抢第一行）。
+func (s *Store) OnWebMedia(ek string, start int64) {
+	if ek == "" || start < 256<<10 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.webMedia == nil || len(s.webMedia) > 2000 {
+		s.webMedia = map[string]time.Time{}
+	}
+	now := time.Now()
+	first, seen := s.webMedia[ek]
+	if !seen {
+		s.webMedia[ek] = now
+		return
+	}
+	if now.Sub(s.hookCurrent) < 15*time.Second || now.Sub(first) < 3*time.Second || now.Sub(s.webMarked) < 4*time.Second {
+		return
+	}
+	for _, it := range s.items {
+		if it.fileKey == "" || it.fileKey != ek || it.Source == "lite" {
+			continue
+		}
+		if s.currentKey != it.Key {
+			it.Opened, s.currentKey, s.webMarked = now, it.Key, now
+			tracef("页面没报，播放器一直在读 %s：标为正在看（%s）", shortEK(ek), label(it))
+			if s.AutoDownload && it.Status != "done" {
+				s.enqueueLocked(it, false)
+			}
+		}
+		return
+	}
+	if s.webUnknown == nil || len(s.webUnknown) > 500 {
+		s.webUnknown = map[string]bool{}
+	}
+	if !s.webUnknown[ek] {
+		s.webUnknown[ek] = true
+		s.needResend = true
+		tracef("正在播的视频不在列表里（%s）：让页面把记住的视频重新报一遍", shortEK(ek))
+	}
+}
+
+// TakeResend 页面轮询时问一下：要不要把它记住的视频重新报一遍。
+// 下载器刚启动还没收到过上报（重启期间页面报的都丢了），或者正在播的视频不在列表里时为 true。
+func (s *Store) TakeResend() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.needResend || s.lastReport.IsZero()
+	s.needResend = false
+	return r
 }
 
 // Enqueue 手动下载（可多条）。失败的链接任务会重新去微信里打开。

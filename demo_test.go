@@ -59,6 +59,17 @@ func TestUIDemo(t *testing.T) {
 	if os.Getenv("DEMO") == "1" && os.Getenv("ASR_READY") == "1" {
 		s.tx.st.Status = "ready"
 	}
+	if os.Getenv("DEMO_LITE") != "" { // 演示“切回网页模式”提示
+		rr := t.TempDir()
+		ec := filepath.Join(rr, "users", "u", "xworker", "liteapp", "local", "packages", "p", "engineConfig", "1", "dist", "engineConfig.json")
+		os.MkdirAll(filepath.Dir(ec), 0o755)
+		os.WriteFile(ec, []byte(`{"featureSwitch":{"handleFinder":true}}`), 0o644)
+		radiumRootFn = func() string { return rr }
+		liteSw.asked = true
+		if st := os.Getenv("DEMO_LITE"); st != "on" {
+			liteSw.st.Status = st
+		}
+	}
 	cfg := config{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/cover.jpg", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, os.Getenv("COVER")) })

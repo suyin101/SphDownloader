@@ -158,6 +158,10 @@
       <span>🎉</span><span class="grow" id="updText"></span>
       <button class="primary" id="updBtn" onclick="applyUpdate()">立即更新</button>
     </div>
+    <div class="banner" id="liteBanner" style="display:none">
+      <span>⚡</span><span class="grow" id="liteText"></span>
+      <button class="primary" id="liteBtn" onclick="liteFix()">切回网页模式</button>
+    </div>
     <div class="banner upd" id="asrBanner" style="display:none">
       <span>📝</span><span class="grow" id="asrText"></span>
     </div>
@@ -339,6 +343,24 @@ var SRC = { link: '链接', lite: '播放器', article: '公众号', xhs: '小�
 function canPreview(it) { return it.url && it.key.indexOf('link:') !== 0 && !isPics(it); }
 function find(key) { return state && state.items.find(function (i) { return i.key === key; }); }
 
+function renderLite(st) {
+  var l = st.liteSwitch || {}, mac = st.os === 'darwin';
+  var quit = mac ? '点屏幕顶部菜单栏「微信 → 退出微信」' : '右键屏幕右下角托盘里的微信图标 → 「退出微信」';
+  var text = '', btn = '';
+  if (l.status === 'waiting') text = '请<b>完全退出微信</b>：' + quit + '。退出后软件会自动修改，并重新打开微信。';
+  else if (l.status === 'done') text = '已切回网页模式，微信正在重新打开。打开后从左侧<b>「视频号」</b>进入，点开的视频会马上出现在下面。';
+  else if (l.status === 'error') { text = '切换失败：' + esc(l.err) + (l.perm ? '。请在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 里打开「视频号下载器」，再点一次。' : ''); btn = '再试一次'; }
+  else if (l.on || st.page === 'lite') { text = '微信的视频号现在用的是<b>自带播放器</b>模式：要从内存里找钥匙，慢，还容易把下一条当成正在看的。<b>切回网页模式</b>后，视频一点开就出现（需要重启一次微信，软件会帮你重新打开）。'; btn = '切回网页模式（推荐）'; }
+  else if (mac && st.sniff && !st.online) { text = '打开视频号后这里一直没反应？可能是微信改用了自带播放器模式，可以切回网页模式（第一次会请你允许读取微信的数据）。'; btn = '切回网页模式'; }
+  if (l.status === 'done' && st.online) text = '';
+  $('liteBanner').style.display = text ? '' : 'none';
+  $('liteText').innerHTML = text;
+  $('liteBtn').style.display = btn ? '' : 'none';
+  $('liteBtn').textContent = btn;
+}
+function liteFix() {
+  api('litefix', {}).then(function () { toast('好的，按提示退出微信就行'); }).catch(fail);
+}
 function render() {
   var st = state;
   $('sniff').checked = st.sniff;
@@ -367,6 +389,7 @@ function render() {
   $('updInfo').textContent = u.status === 'checking' ? '正在检查更新…' : u.status === 'latest' ? '已是最新版本'
     : u.status === 'available' ? '有新版本 v' + u.latest : u.status === 'error' ? u.err : '　';
   $('dir').textContent = st.dir; $('dir').title = st.dir;
+  renderLite(st);
   $('optAuto').checked = st.auto; $('optCover').checked = st.cover; $('optTx').checked = st.autoTranscribe;
   var a = st.asr || {};
   var apct = a.total > 0 ? Math.floor(a.progress / a.total * 100) : 0;
