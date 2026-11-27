@@ -57,7 +57,7 @@ func TestASRDownload(t *testing.T) {
 	defer srv.Close()
 	old := asrParts
 	defer func() { asrParts = old }()
-	asrParts = func() []asrPart {
+	asrParts = func(string) []asrPart {
 		return []asrPart{
 			{Name: asrRuntimeName(), Size: int64(len(zipData)), SHA: sha(zipData), URLs: []string{srv.URL + "/rt.zip"}, Zip: true},
 			{Name: "model.int8.onnx", Size: int64(len(model)), SHA: sha([]byte(model)), URLs: []string{srv.URL + "/bad/model", srv.URL + "/model"}},
@@ -66,11 +66,12 @@ func TestASRDownload(t *testing.T) {
 	asrDir := filepath.Join(dir, "asr")
 	os.MkdirAll(asrDir, 0o755)
 	os.WriteFile(filepath.Join(asrDir, "model.int8.onnx.part"), []byte(model[:1000]), 0o644) // 上次下了一半
-	tr := &Transcriber{dir: asrDir}
-	if err := tr.ensure(); err != nil {
+	tr := &Transcriber{dir: asrDir, ready: map[string]bool{}}
+	if err := tr.ensure(asrFast); err != nil {
 		t.Fatal(err)
 	}
-	if st := tr.State(); st.Status != "ready" || st.Progress != st.Total {
+	tr.SetMode(asrFast)
+	if st := tr.State(); st.Status != "ready" {
 		t.Fatalf("状态不对：%+v", st)
 	}
 	if b, _ := os.ReadFile(filepath.Join(asrDir, "model.int8.onnx")); string(b) != model {
@@ -80,7 +81,7 @@ func TestASRDownload(t *testing.T) {
 		t.Fatal("没解压出程序")
 	}
 	n := atomic.LoadInt32(&hits)
-	if err := tr.ensure(); err != nil || atomic.LoadInt32(&hits) != n {
+	if err := tr.ensure(asrFast); err != nil || atomic.LoadInt32(&hits) != n {
 		t.Fatal("装好后不应该再下载")
 	}
 }
@@ -99,8 +100,9 @@ func TestTranscribeLive(t *testing.T) {
 	video := filepath.Join(tmp, "测试 视频.mp4")
 	b, _ := os.ReadFile(mp4)
 	os.WriteFile(video, b, 0o644)
-	tr := &Transcriber{dir: dir}
-	if !tr.installed() {
+	tr := &Transcriber{dir: dir, ready: map[string]bool{}}
+	tr.SetMode(os.Getenv("ASR_MODE"))
+	if !tr.installed(tr.Mode()) {
 		t.Fatal("组件没装好")
 	}
 	start := time.Now()
@@ -132,4 +134,19 @@ func makeZip(t *testing.T, path string, files map[string]string) {
 	}
 	zw.Close()
 	f.Close()
+}
+
+// 真实从镜像下载某个模式的组件：ASR_DIR=目录 ASR_MODE=accurate go test -count=1 -run TestASRRealDownload -v
+func TestASRRealDownload(t *testing.T) {
+	dir := os.Getenv("ASR_DIR")
+	if dir == "" || os.Getenv("ASR_REAL") == "" {
+		t.Skip()
+	}
+	tr := &Transcriber{dir: dir, ready: map[string]bool{}}
+	mode := normMode(os.Getenv("ASR_MODE"))
+	start := time.Now()
+	if err := tr.ensure(mode); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%s 组件就绪，用时 %v", mode, time.Since(start).Round(time.Second))
 }

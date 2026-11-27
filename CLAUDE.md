@@ -41,6 +41,12 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
   `AUDIO_DIR=一批mp4 go test -run 'TestDecodeMP4Audio|TestDecodeVsFFmpeg' -v` 检查解声音（和 ffmpeg 比相关度，要 ≥0.9）。
   【坑 v1.7.0】go-aac v0.1.0 的 PNS 有 bug，解出来只剩约三成声音，长视频后半段识别成乱码；v1.7.1 升到 800d9fa 修好（相关 0.99）。HE-AACv2 音乐和 ffmpeg 对不上属正常（PS 合成立体声），人声样本 0.99。
   v1.7.1：转文字进度（识别程序边识别边输出，按“识别到第几秒/总时长”算，TxPct）；“转文字”按钮只在勾选后显示；文案窗口可“重新转文字”。
+- 【识别模式 v1.9.0】设置里“精准/快速”，默认精准（config asrMode）。2026-11-27 用三段视频对比 4 个模型（asr-build/cmp/）：
+  Qwen3-ASR 0.6B int8 最准（核心/强点/威胁/窗口期/硬仗/马化腾/大厂都对），FunASR-Nano 次之，SenseVoice 同音字和人名错得多，FireRedASR2 没标点。
+  精准 = Qwen3（csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25，hf-mirror 能下，约 985MB，放 asr/qwen3/），Mac 74 秒视频约 10 秒、12 分钟约 1.5 分钟；快速 = SenseVoice。
+  热词（--qwen3-asr-hotwords 用标题词）实测效果不稳定，没用。别加 --silero-vad-max-speech-duration=15（切断句子多错字）。
+  Qwen3 输出汉字数字，textnorm.go normalizeNumbers 只在后面跟单位时转阿拉伯数字（成语/一下子/千万别/三个人不动），textnorm_test.go 有例句。
+  release.sh 发版时把 Qwen3 文件也传到 asr-v1 当备用源（tokenizer/ 下的文件改名 tokenizer_xxx）。AI 校对（大模型改错字）用户说先不做。
 - 【缩略图 v1.7.1】封面经 /api/coverimg 由软件代取（Windows 网页控件直接加载微信图片可能失败）；自带播放器模式没有封面，界面用 /api/preview 截视频第 1 秒一帧（pumpFrames，一次一个）。
   界面截图用 Electron（headless Chrome 不支持 H.264）：AutoCut 的 node_modules/.bin/electron 离屏打开 DEMO 页面 capturePage。
 - 【小红书 v1.8.0】xhs.go：识别 xhslink.cn/o/…、xiaohongshu.com/discovery/item|explore/<24位id>（整段分享文字直接贴），手机 UA 打开分享页读 window.__INITIAL_STATE__（undefined 要换成 null），

@@ -114,6 +114,11 @@
   .player .pbar .pt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .player .pbar button { background:#2a2a2e; border-color:#3a3a3f; color:#eee; }
   .tag.tx { background:var(--blue-weak); color:var(--blue); }
+  .seg { display:inline-flex; background:var(--hover); padding:2px; border-radius:7px; gap:2px; }
+  .seg label { padding:4px 12px; border-radius:5px; cursor:pointer; color:var(--sub); white-space:nowrap; }
+  .seg input { display:none; }
+  .seg input:checked + span { color:var(--text); font-weight:500; }
+  .seg label:has(input:checked) { background:var(--panel); box-shadow:var(--shadow); }
   .prog.tx i { background:var(--blue); }
   button.link.txt { color:var(--brand); font-weight:500; }
   button.link.txt:hover:not(:disabled) { background:var(--brand-weak); }
@@ -220,6 +225,13 @@
     <div class="switch">
       <div>同时下载封面<small>视频下载完后，存一张同名 .jpg 封面图</small></div>
       <input type="checkbox" id="optCover" onchange="setOpt({cover:this.checked})">
+    </div>
+    <div class="switch">
+      <div>识别模式<small id="modeInfo">　</small></div>
+      <div class="seg">
+        <label><input type="radio" name="asrMode" value="accurate" onchange="setOpt({asrMode:'accurate'})"><span>精准</span></label>
+        <label><input type="radio" name="asrMode" value="fast" onchange="setOpt({asrMode:'fast'})"><span>快速</span></label>
+      </div>
     </div>
     <div class="switch">
       <div>下载完自动转文字<small id="asrInfo">视频下载完后，把说的话转成同名 .txt 文案（在本机识别，不上传）</small></div>
@@ -360,10 +372,15 @@ function render() {
   var apct = a.total > 0 ? Math.floor(a.progress / a.total * 100) : 0;
   $('asrBanner').style.display = (a.status === 'downloading' || a.status === 'error') ? '' : 'none';
   $('asrText').innerHTML = a.status === 'downloading'
-    ? '第一次转文字，正在下载转文字组件… <b>' + apct + '%</b>（' + mb(a.progress) + ' / ' + mb(a.total) + '，只需下载一次）'
+    ? '正在下载' + (a.mode === 'fast' ? '快速' : '精准') + '模式的转文字组件… <b>' + apct + '%</b>（' + mb(a.progress) + ' / ' + mb(a.total) + '，只需下载一次）'
     : a.status === 'error' ? '转文字组件下载失败：' + esc(a.err) + '。检查网络后，再点一次“转文字”会接着下载。' : '';
-  $('asrInfo').textContent = '视频下载完后，把说的话转成同名 .txt 文案（在本机识别，不上传）。' +
-    (a.status === 'ready' ? '转文字组件已安装。' : a.status === 'downloading' ? '组件下载中 ' + apct + '%。' : '第一次转文字时会自动下载组件（约 ' + Math.round((a.total || 0) / 1e6) + ' MB）。');
+  $('asrInfo').textContent = '视频下载完后，把说的话转成同名 .txt 文案（在本机识别，不上传）';
+  document.querySelectorAll('input[name=asrMode]').forEach(function (r) { r.checked = r.value === (a.mode || 'accurate'); });
+  var mb0 = function (n) { return Math.round((n || 0) / 1e6) + ' MB'; };
+  $('modeInfo').textContent = (a.mode === 'fast'
+    ? '快速：1 分钟视频约 2 秒，同音字、人名容易错。'
+    : '精准：人名、专有名词更准，1 分钟视频约 10 秒（Windows 可能更慢）。') +
+    (a.status === 'downloading' ? '组件下载中 ' + apct + '%' : (a.mode === 'fast' ? a.readyFast : a.readyAccurate) ? '已安装' : '第一次使用时自动下载（约 ' + mb0(a.mode === 'fast' ? a.sizeFast : a.sizeAccurate) + '）');
 
   var keys = {}; st.items.forEach(function (i) { keys[i.key] = 1; });
   selected.forEach(function (k) { if (!keys[k]) selected.delete(k); });

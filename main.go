@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	version = "1.8.0"
+	version = "1.9.0"
 	uiPort  = 18889
 )
 
@@ -51,6 +51,7 @@ type config struct {
 	Sniff         *bool  `json:"sniff"`
 	AutoUpdate    *bool  `json:"autoUpdate"`
 	AutoTx        bool   `json:"autoTranscribe"`
+	AsrMode       string `json:"asrMode"` // accurate 精准（默认）/ fast 快速
 }
 
 func loadConfig() config {
@@ -154,6 +155,7 @@ func main() {
 	store.DownloadCover = cfg.DownloadCover
 	store.AutoTranscribe = cfg.AutoTx
 	store.tx = NewTranscriber(filepath.Join(dataDir, "asr"), store)
+	store.tx.SetMode(cfg.AsrMode)
 	store.loadHistory(filepath.Join(dataDir, "history.json"))
 
 	sniffer = &Sniffer{ca: ca, store: store}
@@ -258,6 +260,7 @@ type apiBody struct {
 	On         *bool    `json:"on"`
 	AutoUpdate *bool    `json:"autoUpdate"`
 	AutoTx     *bool    `json:"autoTranscribe"`
+	AsrMode    string   `json:"asrMode"`
 }
 
 func uiHandler(store *Store, cfg *config) http.Handler {
@@ -404,12 +407,18 @@ func uiHandler(store *Store, cfg *config) http.Handler {
 		if b.AutoTx != nil {
 			store.AutoTranscribe = *b.AutoTx
 		}
+		if b.AsrMode != "" && store.tx != nil {
+			store.tx.SetMode(b.AsrMode)
+		}
 		auto, cover, autoTx := store.AutoDownload, store.DownloadCover, store.AutoTranscribe
 		store.mu.Unlock()
 		save(func(c *config) {
 			c.AutoDownload = &auto
 			c.DownloadCover = cover
 			c.AutoTx = autoTx
+			if b.AsrMode != "" {
+				c.AsrMode = normMode(b.AsrMode)
+			}
 			if b.AutoUpdate != nil {
 				c.AutoUpdate = b.AutoUpdate
 			}

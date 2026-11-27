@@ -55,7 +55,7 @@ func TestUIDemo(t *testing.T) {
 	s.currentKey = "1"
 	logf("已启动。保存位置：/Users/demo/Downloads/视频号下载")
 	logf("视频号页面已连上：https://channels.weixin.qq.com/web/pages/home")
-	s.tx = &Transcriber{dir: t.TempDir(), st: ASRState{Status: "downloading", Progress: 112 << 20, Total: 248 << 20}}
+	s.tx = &Transcriber{dir: t.TempDir(), mode: asrAccurate, ready: map[string]bool{asrFast: true}, st: ASRState{Status: "downloading", Progress: 412 << 20, Total: 995 << 20}}
 	if os.Getenv("DEMO") == "1" && os.Getenv("ASR_READY") == "1" {
 		s.tx.st.Status = "ready"
 	}
@@ -68,6 +68,9 @@ func TestUIDemo(t *testing.T) {
 	})
 	mux.HandleFunc("/sel", func(w http.ResponseWriter, r *http.Request) { // 自动勾选两条，截图看“转文字”按钮
 		w.Write(bytes.Replace(uiHTML, []byte("</body>"), []byte(`<script>setTimeout(function(){['7','2'].forEach(function(k){var c=document.querySelector('[data-sel="'+k+'"]');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}))})},800)</script></body>`), 1))
+	})
+	mux.HandleFunc("/set", func(w http.ResponseWriter, r *http.Request) { // 自动打开设置，截图用
+		w.Write(bytes.Replace(uiHTML, []byte("</body>"), []byte(`<script>setTimeout(showSettings,800)</script></body>`), 1))
 	})
 	mux.Handle("/", ui)
 	ln, _ := net.Listen("tcp", "127.0.0.1:18899")

@@ -35,6 +35,14 @@ if [ "$1" = "--publish" ]; then
       "$M/model.int8.onnx" "$M/tokens.txt" --latest=false --title "转文字组件 v1" \
       --notes "视频号下载器的转文字组件（sherpa-onnx v2.0.3 + SenseVoice int8 2024-07-17 + silero VAD），软件第一次转文字时自动下载，不用手动装。"
   fi
+  # 精准模式（Qwen3-ASR）的模型也传一份到 asr-v1 当备用下载源（国内镜像下不了时用）；已经传过就跳过
+  Q=asr-build/cmp/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
+  if ! gh release view asr-v1 --json assets -q '.assets[].name' | grep -q '^decoder.int8.onnx$'; then
+    [ -f $Q/decoder.int8.onnx ] || { echo "缺 $Q（见 CLAUDE.md 识别模式一节）"; exit 1; }
+    T=$(mktemp -d); cp $Q/conv_frontend.onnx $Q/encoder.int8.onnx $Q/decoder.int8.onnx $T/
+    for f in vocab.json merges.txt tokenizer_config.json; do cp $Q/tokenizer/$f $T/tokenizer_$f; done
+    gh release upload asr-v1 $T/* && rm -rf $T
+  fi
   gh release create "v$VER" dist/SphDownloader-windows.zip dist/SphDownloader-windows.exe dist/SphDownloader-mac.zip \
     --title "v$VER" --notes "$NOTES" --latest
   echo "已发布 v$VER"
