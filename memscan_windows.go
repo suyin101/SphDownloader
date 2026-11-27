@@ -11,8 +11,9 @@ import (
 )
 
 // scanWeChatMemory 依次读微信进程（WeChatAppEx.exe，includeMain 时再加 Weixin.exe）的可读内存，每块交给 fn。
+// first 里的进程（上次找到钥匙的）先读；每读完一个进程问一次 stop，返回 true 就不往下读了。
 // 只读不写，不注入。返回成功打开的进程数。
-func scanWeChatMemory(includeMain bool, fn func(buf []byte)) (int, error) {
+func scanWeChatMemory(includeMain bool, first []uint32, fn func(pid uint32, buf []byte), stop func(pid uint32) bool) (int, error) {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return 0, err
@@ -23,10 +24,12 @@ func scanWeChatMemory(includeMain bool, fn func(buf []byte)) (int, error) {
 	pe.Size = uint32(unsafe.Sizeof(pe))
 	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
 		name := strings.ToLower(windows.UTF16ToString(pe.ExeFile[:]))
-		if name == "wechatappex.exe" || (includeMain && (name == "weixin.exe" || name == "wechat.exe")) {
+		isMain := name == "weixin.exe" || name == "wechat.exe"
+		if name == "wechatappex.exe" || (isMain && (includeMain || containsPid(first, pe.ProcessID))) {
 			pids = append(pids, pe.ProcessID)
 		}
 	}
+	pids = orderPids(pids, first)
 	if len(pids) == 0 {
 		return 0, errors.New("没找到微信进程")
 	}
@@ -38,8 +41,11 @@ func scanWeChatMemory(includeMain bool, fn func(buf []byte)) (int, error) {
 			continue
 		}
 		opened++
-		scanProcess(h, buf, fn)
+		scanProcess(h, buf, func(b []byte) { fn(pid, b) })
 		windows.CloseHandle(h)
+		if stop != nil && stop(pid) {
+			break
+		}
 	}
 	if opened == 0 {
 		return 0, errors.New("打不开微信进程（试试右键“以管理员身份运行”下载器）")

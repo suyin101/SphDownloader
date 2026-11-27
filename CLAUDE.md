@@ -50,6 +50,11 @@ Windows 证书优先装“本地计算机”（UAC 提权），失败退到当�
 - 【列表实时 v1.9.1】用户 Windows 反映列表有延迟。三个原因：①界面每秒轮询 → 改成 /api/events 推送（服务端每 200ms 比 stateSig 指纹，变了就推，实测 0.1 秒）+ 2 秒兜底轮询 + 切回窗口立即刷新；
   ②窗口在后台被系统降速 → Windows 设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 关后台节流，Mac 用 NSProcessInfo beginActivity 关 App Nap；
   ③自带播放器模式要扫内存找到钥匙才出条目 → 开始播放就先放占位条目 lite-wait:<ek>（“正在找解密钥匙”），找到后替换（保持位置、正在看），找不到改成失败说明。
+- 【自带播放器模式 v1.9.2，按用户 Windows 日志 trace(4).log 修】每点开一个视频，同一秒出现两条新地址：/20302/ = 正在播，/20304/、/20350/ = 微信预加载的下一条。
+  played 判断改为：路径含 /20302/，或 Content-Range 起点 >256KB（真的往后读）；以前的“带 m= 或请求≥3 次”会把预加载的当正在看、抢第一行。
+  预加载的照样在后台找钥匙，找到后 state=resolved 藏着（lm.res），划到它（played 变 true）时 liteShowLocked 立即显示并设为正在看；预加载时失败的，播放后重找。
+  提速：memScan(includeMain, first, fn(pid,buf), stop) 每读完一个进程就对一次钥匙，正在播的都对上就停；对上的进程记进 hot（最多 3 个）下次先读；有正在播的在等时扫描间隔 1 秒（否则 4 秒）。
+  日志里有“自带播放器请求 … Content-Range=… m=…”和“钥匙在进程 X 里找到（…，用时）”，下次排查看这两行。
 - 【缩略图 v1.7.1】封面经 /api/coverimg 由软件代取（Windows 网页控件直接加载微信图片可能失败）；自带播放器模式没有封面，界面用 /api/preview 截视频第 1 秒一帧（pumpFrames，一次一个）。
   界面截图用 Electron（headless Chrome 不支持 H.264）：AutoCut 的 node_modules/.bin/electron 离屏打开 DEMO 页面 capturePage。
 - 【小红书 v1.8.0】xhs.go：识别 xhslink.cn/o/…、xiaohongshu.com/discovery/item|explore/<24位id>（整段分享文字直接贴），手机 UA 打开分享页读 window.__INITIAL_STATE__（undefined 要换成 null），

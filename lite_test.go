@@ -95,7 +95,13 @@ func liteTestStore(t *testing.T, mem []byte) *Store {
 	t.Helper()
 	oldE, oldM, oldG := liteEnabled, memScan, liteScanGap
 	liteEnabled, liteScanGap = true, 10*time.Millisecond
-	memScan = func(includeMain bool, fn func([]byte)) (int, error) { fn(mem); return 1, nil }
+	memScan = func(includeMain bool, first []uint32, fn func(uint32, []byte), stop func(uint32) bool) (int, error) {
+		fn(1, mem)
+		if stop != nil {
+			stop(1)
+		}
+		return 1, nil
+	}
 	t.Cleanup(func() { liteEnabled, memScan, liteScanGap = oldE, oldM, oldG })
 	dataDir = t.TempDir()
 	return NewStore(t.TempDir())
@@ -227,5 +233,80 @@ func TestLiteHeadFromProxy(t *testing.T) {
 	}
 	if _, want := s.OnLiteMedia(u, "video/mp4", h, 206); want {
 		t.Fatal("已经有开头了")
+	}
+}
+
+// 用户日志（2026-11-27）：点开一个视频，同一秒出现 /20302/（正在播）和 /20304/（预加载的下一条）。
+// 预加载的要先藏着，不能进列表、不能抢第一行；划到它（真的往后读）时马上出现。
+func TestLitePreloadHidden(t *testing.T) {
+	const seedA, seedB = 1111111111, 2222222222
+	const ekB = "Zq9X7bVw3nT2LmPk8RsH4dFgYjUe6cA1oQiW5zNxBvE"
+	plainA, plainB := fakeMP4(400000), fakeMP4(500000)
+	srvA, srvB := serveVideo(t, encrypt(plainA, seedA)), serveVideo(t, encrypt(plainB, seedB))
+	jsA := `{"description":"正在播的","url":"` + srvA.URL + `/251/20302/stodownload?encfilekey=` + testEK + `","decodeKey":"1111111111"}`
+	jsB := `{"description":"下一条","url":"` + srvB.URL + `/251/20304/stodownload?encfilekey=` + ekB + `","decodeKey":"2222222222"}`
+	s := liteTestStore(t, memWith(u16(jsA), u16(jsB)))
+	uA := srvA.URL + "/251/20302/stodownload?encfilekey=" + testEK + "&token=t"
+	uB := srvB.URL + "/251/20304/stodownload?encfilekey=" + ekB + "&token=t"
+	playLite(s, uA, 1)
+	playLite(s, uB, 1) // 预加载：只读开头
+	a := waitItem(t, s, func(it Item) bool { return it.Key == "lite:1111111111" })
+	if s.CurrentKey() != a.Key {
+		t.Fatalf("正在看的应该是 A，现在是 %s", s.CurrentKey())
+	}
+	// 等预加载的那条也找到钥匙
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s.mu.Lock()
+		st := s.lite[ekB].state
+		s.mu.Unlock()
+		if st == "resolved" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("预加载的没在后台找钥匙：%s", st)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, ok := s.Get("lite:2222222222"); ok {
+		t.Fatal("预加载的下一条不该出现在列表里")
+	}
+	for _, it := range func() []Item { items, _ := s.Snapshot(); return items }() {
+		if strings.HasPrefix(it.Key, "lite-wait:") {
+			t.Fatalf("预加载的不该有占位：%+v", it)
+		}
+	}
+	// 划到 B：播放器往后读
+	h := http.Header{}
+	h.Set("Content-Range", "bytes 1048576-2097151/500000000")
+	h.Set("X-enclen", "131072")
+	s.OnLiteMedia(uB, "video/mp4", h, 206)
+	b, ok := s.Get("lite:2222222222")
+	if !ok || b.Title != "下一条" || s.CurrentKey() != b.Key {
+		t.Fatalf("划到 B 时应该马上出现并成为正在看：ok=%v %+v 当前=%s", ok, b, s.CurrentKey())
+	}
+	items, _ := s.Snapshot()
+	if items[0].Key != b.Key {
+		t.Fatalf("第一行应该是正在看的 B，现在是 %s", items[0].Key)
+	}
+}
+
+func TestRangeStart(t *testing.T) {
+	for cr, want := range map[string]int64{"bytes 0-1000/400000": 0, "bytes 1048576-2097151/5000000": 1048576, "": 0, "bytes */100": 0} {
+		h := http.Header{}
+		h.Set("Content-Range", cr)
+		if got := rangeStart(h); got != want {
+			t.Errorf("%q → %d，应该是 %d", cr, got, want)
+		}
+	}
+}
+
+func TestOrderPids(t *testing.T) {
+	got := orderPids([]uint32{10, 20, 30, 40}, []uint32{30, 99, 10})
+	want := []uint32{30, 10, 20, 40}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%v", got)
+		}
 	}
 }

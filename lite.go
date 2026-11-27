@@ -34,7 +34,8 @@ import (
 var (
 	liteEnabled = runtime.GOOS == "windows"
 	memScan     = scanWeChatMemory
-	liteScanGap = 4 * time.Second
+	liteScanGap = 4 * time.Second // 没有正在播的视频在等时，两次扫描至少隔这么久
+	liteHotGap  = 1 * time.Second // 有正在播的视频在等钥匙时
 )
 
 type liteMedia struct {
@@ -50,7 +51,14 @@ type liteMedia struct {
 	state       string // pending / done / failed
 	played      bool
 	itemKey     string
-	waitKey     string // 正在找钥匙时列表里先放的占位条目
+	waitKey     string   // 正在找钥匙时列表里先放的占位条目
+	res         *liteRes // 钥匙已找到、但还没播放（微信预加载的下一条）：先藏着，划到它时马上显示
+}
+
+type liteRes struct {
+	seed uint64
+	ks   []byte
+	info seedInfo
 }
 
 // liteWaitLocked 开始播放就先在列表里放一条“正在找钥匙”，不用干等内存扫描（几秒）才出现。
@@ -60,7 +68,7 @@ func (s *Store) liteWaitLocked(lm *liteMedia) {
 	}
 	lm.waitKey = "lite-wait:" + shortEK(lm.ek)
 	now := time.Now()
-	it := &Item{Key: lm.waitKey, FeedInfo: FeedInfo{ID: lm.waitKey, Title: "视频号视频（正在从微信里找解密钥匙，播放几秒就好）", Size: lm.total},
+	it := &Item{Key: lm.waitKey, FeedInfo: FeedInfo{ID: lm.waitKey, Title: "视频号视频（正在从微信里找解密钥匙…）", Size: lm.total},
 		Source: "lite", Status: "resolving", Seen: now, Opened: now}
 	s.items[lm.waitKey] = it
 	s.currentKey = lm.waitKey
@@ -129,7 +137,7 @@ func (s *Store) OnLiteMedia(raw string, ct string, h http.Header, status int) (e
 		s.lite = map[string]*liteMedia{}
 		s.liteKick = make(chan struct{}, 1)
 		go s.liteLoop()
-		logf("微信用的是自带播放器：正在从微信内存里找解密钥匙。请把要下载的视频播放 5~10 秒")
+		logf("微信用的是自带播放器：正在从微信内存里找解密钥匙（第一次要读完所有微信进程，约 5 秒；之后一般 1 秒内）")
 	}
 	s.liteSeen = time.Now()
 	lm := s.lite[ek]
@@ -140,6 +148,10 @@ func (s *Store) OnLiteMedia(raw string, ct string, h http.Header, status int) (e
 	}
 	lm.count++
 	lm.last = time.Now()
+	start := rangeStart(h)
+	if lm.count <= 3 || start > 0 && !lm.played {
+		tracef("自带播放器请求 %s %s 第%d次 Content-Range=%q m=%v", shortEK(ek), pu.Path, lm.count, h.Get("Content-Range"), q.Get("m") != "")
+	}
 	if m := q.Get("m"); m != "" || lm.m == "" {
 		lm.url, lm.m = raw, m
 	}
@@ -147,8 +159,17 @@ func (s *Store) OnLiteMedia(raw string, ct string, h http.Header, status int) (e
 		lm.total = total
 	}
 	wasPlayed := lm.played
-	lm.played = lm.played || lm.m != "" || lm.count >= 3
+	// 2026-11-27 用户 Windows 日志：每点开一个视频，同一秒出现两条新地址，/20302/ 是正在播的，/20304/、/20350/ 是微信预加载的下一条。
+	// 以前用“带 m= 或请求≥3 次”判断，把预加载的也当成正在看了，还会抢到列表第一行。
+	// 现在：/20302/ = 正在看；别的路径要真的往后读（Range 不从 0 开始）才算在播。
+	lm.played = lm.played || strings.Contains(pu.Path, "/20302/") || start > 256<<10
+	if lm.played && !wasPlayed && lm.state == "failed" { // 预加载时没找到，真播放了再找一轮
+		lm.state, lm.scans, lm.headErr = "pending", 0, 0
+	}
 	s.liteWaitLocked(lm)
+	if lm.state == "resolved" && lm.played { // 预加载时已经找到钥匙：划到它的瞬间就显示
+		s.liteShowLocked(lm)
+	}
 	if lm.state == "done" {
 		if it := s.items[lm.itemKey]; it != nil {
 			if it.Status == "seen" || it.Status == "error" || it.Status == "done" {
@@ -234,10 +255,11 @@ type liteJob struct {
 }
 
 func (s *Store) liteLoop() {
-	tick := time.NewTicker(2 * time.Second)
+	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 	var lastScan time.Time
 	scanNo := 0
+	var hot []uint32 // 最近找到钥匙的微信进程，先读它们（钥匙一般在同一个进程里）
 	for {
 		select {
 		case <-s.liteKick:
@@ -296,7 +318,15 @@ func (s *Store) liteLoop() {
 			}
 			ready = append(ready, j)
 		}
-		if len(ready) == 0 || time.Since(lastScan) < liteScanGap {
+		urgent := false
+		for _, j := range ready {
+			urgent = urgent || j.played
+		}
+		gap := liteScanGap
+		if urgent && len(hot) > 0 {
+			gap = liteHotGap
+		}
+		if len(ready) == 0 || time.Since(lastScan) < gap {
 			continue
 		}
 		lastScan = time.Now()
@@ -311,9 +341,32 @@ func (s *Store) liteLoop() {
 		}
 		seeds := seedSet{}
 		start := time.Now()
-		procs, err := memScan(scanNo%2 == 0, func(buf []byte) { extractSeeds(buf, prefixes, seeds) })
+		matched := map[*liteJob]bool{}
+		// 每读完一个进程就对一次：正在播的都对上了就停，不用把十几个进程全读完
+		procs, err := memScan(scanNo%2 == 0, hot, func(_ uint32, buf []byte) { extractSeeds(buf, prefixes, seeds) }, func(pid uint32) bool {
+			hit, waiting := false, false
+			for _, j := range ready {
+				if matched[j] {
+					continue
+				}
+				if seed, info, ok := seeds.match(j.head, ekPrefix(j.ek)); ok {
+					matched[j], hit = true, true
+					s.liteResolved(j.lm, seed, nil, info)
+					tracef("钥匙在进程 %d 里找到（%s，%v）", pid, shortEK(j.ek), time.Since(start).Round(100*time.Millisecond))
+				} else if j.played {
+					waiting = true
+				}
+			}
+			if hit {
+				hot = append([]uint32{pid}, removePid(hot, pid)...)
+				if len(hot) > 3 {
+					hot = hot[:3]
+				}
+			}
+			return !waiting && len(matched) > 0
+		})
 		took := time.Since(start).Round(100 * time.Millisecond)
-		tracef("内存扫描 #%d：进程 %d，候选钥匙 %d，待对视频 %d，用时 %v，err=%v", scanNo, procs, len(seeds), len(ready), took, err)
+		tracef("内存扫描 #%d：进程 %d，候选钥匙 %d，待对视频 %d，对上 %d，用时 %v，err=%v", scanNo, procs, len(seeds), len(ready), len(matched), took, err)
 		if err != nil {
 			if scanNo <= 2 || scanNo%10 == 0 {
 				logf("读取微信内存失败：%v", err)
@@ -323,9 +376,7 @@ func (s *Store) liteLoop() {
 		}
 		var left []*liteJob
 		for _, j := range ready {
-			if seed, info, ok := seeds.match(j.head, ekPrefix(j.ek)); ok {
-				s.liteResolved(j.lm, seed, nil, info)
-			} else {
+			if !matched[j] {
 				left = append(left, j)
 			}
 		}
@@ -351,7 +402,7 @@ func (s *Store) liteLoop() {
 		if len(tryHdr) > 0 {
 			var hdrs [][]byte
 			seen := map[[16]byte]bool{}
-			memScan(false, func(buf []byte) { findPlainHeaders(buf, &hdrs, seen) })
+			memScan(false, hot, func(_ uint32, buf []byte) { findPlainHeaders(buf, &hdrs, seen) }, nil)
 			tracef("明文开头候选 %d 个", len(hdrs))
 			logf("没找到钥匙，改找微信解密好的视频开头：候选 %d 个", len(hdrs))
 			for _, j := range tryHdr {
@@ -408,6 +459,20 @@ func (s *Store) liteResolved(lm *liteMedia, seed uint64, ks []byte, info seedInf
 	if lm.state != "pending" {
 		return
 	}
+	lm.res, lm.state = &liteRes{seed, ks, info}, "resolved"
+	if lm.played {
+		s.liteShowLocked(lm)
+	} else {
+		tracef("预加载的视频先找到钥匙，等播放时再显示（%s）", shortEK(lm.ek))
+	}
+}
+
+// liteShowLocked 把找到钥匙的视频放进列表（只在真的播放时）。
+func (s *Store) liteShowLocked(lm *liteMedia) {
+	if lm.state != "resolved" || lm.res == nil {
+		return
+	}
+	seed, ks, info := lm.res.seed, lm.res.ks, lm.res.info
 	id := "lite:" + strconv.FormatUint(seed, 10)
 	if ks != nil {
 		h := md5.Sum(ks)
@@ -801,4 +866,53 @@ func fetchRange(u string, a, b int64) ([]byte, int64, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, b-a+1))
 	return data, total, err
+}
+
+// rangeStart 响应 Content-Range 的起点（bytes 1000-1999/5000 → 1000），没有就是 0。
+func rangeStart(h http.Header) int64 {
+	cr := h.Get("Content-Range")
+	if i := strings.Index(cr, "bytes "); i >= 0 {
+		cr = cr[i+6:]
+	}
+	a, _, ok := strings.Cut(cr, "-")
+	if !ok {
+		return 0
+	}
+	n, _ := strconv.ParseInt(strings.TrimSpace(a), 10, 64)
+	return n
+}
+
+func containsPid(list []uint32, pid uint32) bool {
+	for _, p := range list {
+		if p == pid {
+			return true
+		}
+	}
+	return false
+}
+
+func removePid(list []uint32, pid uint32) []uint32 {
+	var out []uint32
+	for _, p := range list {
+		if p != pid {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// orderPids first 里有的排前面（按 first 的顺序），其余保持原顺序。
+func orderPids(pids, first []uint32) []uint32 {
+	var out []uint32
+	for _, f := range first {
+		if containsPid(pids, f) {
+			out = append(out, f)
+		}
+	}
+	for _, p := range pids {
+		if !containsPid(first, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
